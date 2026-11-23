@@ -39,10 +39,56 @@ internal static class DocumentLoader
             }
         }
 
+        try
+        {
+            await LoadNamesAsync(book, reader, cancellationToken);
+        }
+        catch (XmlException exception)
+        {
+            return Result.Invalid($"The file is damaged: the workbook part has broken XML ({exception.Message}).");
+        }
+
         // Loading is not a change; the formula engine starts from a clean slate.
         book.ChangedCells.Clear();
 
         return Result.Success();
+    }
+
+    /// <summary>The defined names, which the formula engine resolves. The file keeps its own copy, which is saved as it was.</summary>
+    private static async Task LoadNamesAsync(Workbook book, XlsxReader reader, CancellationToken cancellationToken)
+    {
+        if (XmlParts.TryFindEntry(reader.Archive, reader.WorkbookPath, out ZipArchiveEntry? entry) == false)
+        {
+            return;
+        }
+
+        await using Stream stream = await entry.OpenAsync(cancellationToken);
+        using XmlReader xml = XmlReader.Create(stream, XmlParts.Settings);
+
+        while (xml.EOF == false)
+        {
+            if (XmlParts.IsElement(xml, "definedName") == false)
+            {
+                await xml.ReadAsync();
+
+                continue;
+            }
+
+            string? name = xml.GetAttribute("name");
+            int scope = -1;
+
+            if (int.TryParse(xml.GetAttribute("localSheetId"), NumberStyles.None, CultureInfo.InvariantCulture, out int sheetIndex) == true)
+            {
+                scope = sheetIndex;
+            }
+
+            string formula = await xml.ReadElementContentAsStringAsync();
+
+            if (name is not null && formula.Length > 0)
+            {
+                book.DefinedNames.Add(new Formulas.DefinedName(name, scope, formula));
+            }
+        }
     }
 
     private static async Task<Worksheet> LoadSheetAsync(Workbook book, SheetPart part, ZipArchiveEntry entry, XlsxReader reader, CancellationToken cancellationToken)

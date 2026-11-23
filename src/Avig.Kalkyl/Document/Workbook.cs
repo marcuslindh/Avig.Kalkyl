@@ -46,6 +46,12 @@ public sealed class Workbook
 
     internal string? WorkbookPath { get; }
 
+    /// <summary>The clock NOW() and TODAY() read. Replaceable in tests.</summary>
+    internal TimeProvider Clock { get; set; } = TimeProvider.System;
+
+    /// <summary>The workbook's defined names, read when the file is opened. Used by the formula engine.</summary>
+    internal List<Formulas.DefinedName> DefinedNames { get; } = [];
+
     /// <summary>Cells set since the last recalculation. Read and cleared by the formula engine.</summary>
     internal HashSet<(Worksheet Sheet, int Row, int Column)> ChangedCells => changedCells;
 
@@ -200,6 +206,54 @@ public sealed class Workbook
     {
         ArgumentNullException.ThrowIfNull(output);
         await DocumentSaver.SaveAsync(this, output, cancellationToken);
+    }
+
+    /// <summary>
+    /// Calculates formulas and stores their results in the cells, so that they can be read and
+    /// are saved with the file. With <see cref="RecalculationScope.Changed"/> (the default) only
+    /// formulas affected by cells set since the last recalculation are calculated, together with
+    /// volatile functions; <see cref="RecalculationScope.All"/> calculates every formula.
+    /// A function the engine does not know gives #NAME?, as in Excel; the report lists them.
+    /// </summary>
+    /// <param name="scope">Which formulas to calculate.</param>
+    /// <param name="cancellationToken">Cancels the calculation.</param>
+    /// <returns>What was calculated, and circular references, unknown functions and broken formulas.</returns>
+    public async Task<RecalculationReport> RecalculateAsync(RecalculationScope scope = RecalculationScope.Changed, CancellationToken cancellationToken = default)
+    {
+        DateTime now = Clock.GetLocalNow().DateTime;
+
+        return await Task.Run(() => Formulas.Recalculator.Run(this, scope, now, cancellationToken), cancellationToken);
+    }
+
+    /// <summary>
+    /// Evaluates a formula against the workbook as it is, without storing anything. Formula cells
+    /// it reads give their stored results, so recalculate first if cells have changed.
+    /// </summary>
+    /// <param name="formula">The formula, with or without a leading <c>=</c>, such as <c>SUM(Budget!B2:B9)</c>.</param>
+    /// <param name="sheet">The sheet that references without a sheet name point to; the first sheet when null.</param>
+    /// <returns>The result, or Invalid when the formula cannot be parsed.</returns>
+    public Result<CellValue> Evaluate(string formula, Worksheet? sheet = null)
+    {
+        ArgumentNullException.ThrowIfNull(formula);
+        Worksheet? context = sheet ?? sheets.FirstOrDefault();
+
+        if (context is null)
+        {
+            return Result<CellValue>.Invalid("The workbook has no sheets to evaluate the formula against.");
+        }
+
+        Result<Formulas.Node> parsed = Formulas.FormulaParser.Parse(formula);
+
+        if (parsed.IsSuccess(out Formulas.Node? node) == false)
+        {
+            return Result<CellValue>.Invalid(parsed.Error!);
+        }
+
+        Formulas.Evaluator evaluator = new(this, Clock.GetLocalNow().DateTime);
+        Formulas.EvaluationContext evaluationContext = new(context, 0, 0);
+        Formulas.Value result = evaluator.Dereference(evaluator.Evaluate(node, evaluationContext), evaluationContext);
+
+        return Formulas.Recalculator.ToCellValue(result, Style.Default, Uses1904Dates);
     }
 
     /// <summary>True once a sheet's settings (widths, panes, filter, visibility) have changed.</summary>
