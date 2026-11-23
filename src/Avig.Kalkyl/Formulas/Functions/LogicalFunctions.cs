@@ -12,6 +12,105 @@ internal static class LogicalFunctions
         table.Add("NOT", 1, 1, Not);
         table.Add("TRUE", 0, 0, _ => Value.True);
         table.Add("FALSE", 0, 0, _ => Value.False);
+        table.Add("IFS", 2, FunctionTable.Many, Ifs);
+        table.Add("XOR", 1, FunctionTable.Many, call => Combine(call, (odd, item) => odd ^ item, false));
+        table.Add("IFNA", 2, 2, IfNa);
+        table.Add("SWITCH", 3, FunctionTable.Many, Switch);
+    }
+
+    /// <summary>IFS: the value after the first TRUE condition; #N/A when none is TRUE.</summary>
+    private static Value Ifs(FunctionCall call)
+    {
+        for (int index = 0; index < call.Count; index += 2)
+        {
+            if (call.TryBool(index, out bool condition, out Value error) == false)
+            {
+                return error;
+            }
+
+            if (condition == false)
+            {
+                continue;
+            }
+
+            if (index + 1 >= call.Count)
+            {
+                return Value.NA;
+            }
+
+            if (call.IsMissing(index + 1) == true)
+            {
+                return Value.FromNumber(0);
+            }
+
+            return call.Raw(index + 1);
+        }
+
+        return Value.NA;
+    }
+
+    private static Value IfNa(FunctionCall call)
+    {
+        Value value = call.Scalar(0);
+
+        if (value.IsError == true && value.Text == Value.NA.Text)
+        {
+            return call.Raw(1);
+        }
+
+        return call.Raw(0);
+    }
+
+    /// <summary>
+    /// SWITCH(expression, value1, result1, …, [default]): the result for the first value equal to
+    /// the expression (text without regard to case, as =); the default or #N/A when none matches.
+    /// </summary>
+    private static Value Switch(FunctionCall call)
+    {
+        Value expression = call.Scalar(0);
+
+        if (expression.IsError == true)
+        {
+            return expression;
+        }
+
+        int index = 1;
+
+        while (index + 1 < call.Count)
+        {
+            Value candidate = call.Scalar(index);
+
+            if (candidate.IsError == true)
+            {
+                return candidate;
+            }
+
+            if (Same(expression, candidate) == true)
+            {
+                return call.Raw(index + 1);
+            }
+
+            index += 2;
+        }
+
+        if (index < call.Count)
+        {
+            return call.Raw(index);
+        }
+
+        return Value.NA;
+    }
+
+    private static bool Same(Value left, Value right)
+    {
+        bool bothSet = left.IsBlank == false && right.IsBlank == false;
+
+        if (bothSet == true && left.Kind != right.Kind)
+        {
+            return false;
+        }
+
+        return Coerce.Compare(left, right) == 0;
     }
 
     private static Value If(FunctionCall call)
