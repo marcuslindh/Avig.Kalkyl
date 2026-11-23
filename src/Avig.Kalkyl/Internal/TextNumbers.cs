@@ -3,9 +3,9 @@ using System.Globalization;
 namespace Avig.Kalkyl.Internal;
 
 /// <summary>
-/// Tal som står som text i en cell, vilket är vanligt i filer från andra system. Både punkt och
-/// komma godtas som decimaltecken, eftersom svenska filer ofta har "1,5". Ett ensamt komma
-/// utan punkt tolkas som decimaltecken; annars gäller invariant tolkning med tusentalsavgränsare.
+/// Numbers stored as text in a cell, which is common in files from other systems. Both a dot
+/// and a comma are accepted as decimal separators, since Swedish files often have "1,5". A single
+/// comma without a dot is a decimal separator; otherwise invariant parsing with thousands separators applies.
 /// </summary>
 internal static class TextNumbers
 {

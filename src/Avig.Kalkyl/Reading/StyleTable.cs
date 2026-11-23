@@ -6,8 +6,8 @@ using Avig.Kalkyl.Internal;
 namespace Avig.Kalkyl.Reading;
 
 /// <summary>
-/// Det läsaren behöver ur styles.xml: talformatet för varje cellformat (cellXfs), och om det
-/// formatet är ett datum. Övrig formatering läses inte i strömläget.
+/// What the reader needs from styles.xml: the number format of every cell format (cellXfs), and whether
+/// that format is a date. Other formatting is not read in streaming mode.
 /// </summary>
 internal sealed class StyleTable
 {

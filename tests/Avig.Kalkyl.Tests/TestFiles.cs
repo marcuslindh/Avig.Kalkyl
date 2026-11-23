@@ -5,7 +5,7 @@ using DocumentFormat.OpenXml.Validation;
 
 namespace Avig.Kalkyl.Tests;
 
-/// <summary>Hjälp för att skriva, läsa och bygga xlsx-filer i minnet.</summary>
+/// <summary>Helpers for writing, reading and building xlsx files in memory.</summary>
 internal static class TestFiles
 {
     public static async Task<MemoryStream> WriteAsync(Func<XlsxWriter, Task> write)
@@ -51,7 +51,7 @@ internal static class TestFiles
         return rows;
     }
 
-    /// <summary>Bygger ett paket av delar, som en fil från ett annat program.</summary>
+    /// <summary>Builds a package from parts, like a file from another program.</summary>
     public static MemoryStream Package(params (string Path, string Content)[] parts)
     {
         MemoryStream stream = new();
@@ -84,7 +84,7 @@ internal static class TestFiles
         return content;
     }
 
-    /// <summary>Microsofts schemavalidator. En tom lista betyder att Excel kan öppna filen utan att reparera den.</summary>
+    /// <summary>Microsoft's schema validator. An empty list means Excel can open the file without repairing it.</summary>
     public static List<string> Validate(Stream stream)
     {
         stream.Position = 0;

@@ -1,10 +1,10 @@
 namespace Avig.Kalkyl.Internal;
 
 /// <summary>
-/// Excels datum är dagar sedan en startpunkt. I 1900-systemet är dag 1 1900-01-01, och Excel
-/// räknar 1900 som skottår (ett arv från Lotus 1-2-3), så dag 60 är den påhittade 1900-02-29.
-/// Från dag 61 (1900-03-01) stämmer räkningen igen med 1899-12-30 som dag 0. I 1904-systemet
-/// (gamla Mac-filer) är dag 0 1904-01-01 och det finns inget påhittat datum.
+/// Excel dates are days since a starting point. In the 1900 system day 1 is 1900-01-01, and Excel
+/// counts 1900 as a leap year (inherited from Lotus 1-2-3), so day 60 is the made-up 1900-02-29.
+/// From day 61 (1900-03-01) the count is right again with 1899-12-30 as day 0. In the 1904 system
+/// (old Mac files) day 0 is 1904-01-01 and there is no made-up date.
 /// </summary>
 internal static class ExcelDate
 {
@@ -15,7 +15,18 @@ internal static class ExcelDate
     private static readonly DateTime FirstMarch1900 = new(1900, 3, 1, 0, 0, 0, DateTimeKind.Unspecified);
     private static readonly DateTime Base1904 = new(1904, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
 
-    /// <summary>Datum till serienummer i 1900-systemet, som är det paketet alltid skriver.</summary>
+    /// <summary>A date to a serial number in the 1900 or 1904 system.</summary>
+    public static double ToSerial(DateTime date, bool uses1904)
+    {
+        if (uses1904 == true)
+        {
+            return (date - Base1904).TotalDays;
+        }
+
+        return ToSerial(date);
+    }
+
+    /// <summary>A date to a serial number in the 1900 system, which is what new files always use.</summary>
     public static double ToSerial(DateTime date)
     {
         if (date < FirstMarch1900)
@@ -26,7 +37,7 @@ internal static class ExcelDate
         return (date - Base1900).TotalDays;
     }
 
-    /// <summary>Serienummer till datum. Avrundas till hela millisekunder så att 12:00 inte blir 11:59:59.999.</summary>
+    /// <summary>A serial number to a date, rounded to whole milliseconds so that 12:00 does not become 11:59:59.999.</summary>
     public static bool TryFromSerial(double serial, bool uses1904, out DateTime date)
     {
         date = DateTime.MinValue;
@@ -49,7 +60,7 @@ internal static class ExcelDate
         }
         else if (serial < 61)
         {
-            // Den påhittade 1900-02-29 finns inte i DateTime. Närmaste riktiga dag är den 28:e.
+            // The made-up 1900-02-29 does not exist in DateTime. The nearest real day is the 28th.
             start = DayZero1900;
             days = serial - 1;
         }

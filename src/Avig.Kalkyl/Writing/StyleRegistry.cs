@@ -5,9 +5,9 @@ using Avig.Kalkyl.Internal;
 namespace Avig.Kalkyl.Writing;
 
 /// <summary>
-/// Samlar stilarna medan raderna skrivs och slår ihop likadana, så att varje unik stil blir
-/// en enda post i styles.xml. Typsnitt, fyllningar och talformat slås ihop var för sig, så
-/// två stilar som bara skiljer sig i färg delar typsnitt.
+/// Collects the styles while rows are written and merges equal ones, so that every unique style
+/// becomes a single entry in styles.xml. Fonts, fills and number formats are merged separately,
+/// so two styles that differ only in fill share a font.
 /// </summary>
 internal sealed class StyleRegistry
 {
@@ -32,16 +32,21 @@ internal sealed class StyleRegistry
         cellFormats[(Style.Default, null)] = 0;
     }
 
-    /// <summary>Antal unika cellformat, inklusive standardformatet på plats 0.</summary>
+    /// <summary>The number of unique cell formats, including the default at position 0.</summary>
     public int Count => formats.Count;
 
     /// <summary>
-    /// Index i cellXfs för en stil. <paramref name="defaultFormat"/> används när stilen inte
-    /// har något eget talformat; det är så datum utan format får yyyy-mm-dd.
+    /// The cellXfs index for a style. <paramref name="defaultFormat"/> is used when the style has
+    /// no number format of its own; that is how dates without a format get yyyy-mm-dd.
     /// </summary>
-    public int GetIndex(Style style, string? defaultFormat)
+    public int GetIndex(Style style, string defaultFormat)
     {
-        string? format = style.NumberFormat ?? defaultFormat;
+        string? format = style.NumberFormat;
+
+        if (format is null && defaultFormat.Length > 0)
+        {
+            format = defaultFormat;
+        }
 
         if (cellFormats.TryGetValue((style, format), out int existing) == true)
         {
@@ -63,7 +68,7 @@ internal sealed class StyleRegistry
         {
             if (fillIds.TryGetValue(style.Background, out fillId) == false)
             {
-                // 0 och 1 är reserverade: Excel kräver none och gray125 först.
+                // 0 and 1 are reserved: Excel requires none and gray125 first.
                 fillId = fills.Count + 2;
                 fills.Add(style.Background);
                 fillIds[style.Background] = fillId;

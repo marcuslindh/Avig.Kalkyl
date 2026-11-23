@@ -97,7 +97,7 @@ public static class KalkylCells
             return Cell.Empty;
         }
 
-        // Via text, så att 0.1f blir 0.1 och inte 0.100000001490116.
+        // Through text, so that 0.1f becomes 0.1 and not 0.100000001490116.
         return double.Parse(value.Value.ToString("R", System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
     }
 

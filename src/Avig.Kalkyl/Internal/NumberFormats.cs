@@ -1,12 +1,12 @@
 namespace Avig.Kalkyl.Internal;
 
 /// <summary>
-/// Excels inbyggda talformat (id 0–49) och regeln för när ett format betyder datum.
-/// I filen är ett datum bara ett tal; det är formatet som säger att det ska visas som datum.
+/// Excel's built-in number formats (ids 0–49) and the rule for when a format means a date.
+/// In the file a date is just a number; the format is what says to show it as a date.
 /// </summary>
 internal static class NumberFormats
 {
-    /// <summary>Första id:t för egna format. Lägre id:n är reserverade för de inbyggda.</summary>
+    /// <summary>The first id for custom formats. Lower ids are reserved for the built-in ones.</summary>
     public const int FirstCustomId = 164;
 
     public const string DateFormat = "yyyy-mm-dd";
@@ -48,7 +48,7 @@ internal static class NumberFormats
         .Where(entry => entry.Key != 14 && entry.Key != 22)
         .ToDictionary(entry => entry.Value, entry => entry.Key, StringComparer.Ordinal);
 
-    /// <summary>Formatkoden för ett inbyggt id, om id:t har en känd kod.</summary>
+    /// <summary>The format code for a built-in id, when the id has a known code.</summary>
     public static bool TryGetBuiltIn(int id, out string code)
     {
         if (BuiltIn.TryGetValue(id, out string? found) == true)
@@ -64,8 +64,8 @@ internal static class NumberFormats
     }
 
     /// <summary>
-    /// Id:t för en kod som är inbyggd. 14 och 22 tas inte med: Excel visar dem i datorns
-    /// språkinställning, inte som koden säger, så en skriven "mm-dd-yy" ska få ett eget id.
+    /// The id of a built-in code. 14 and 22 are left out: Excel shows them in the computer's
+    /// regional settings, not as the code says, so a written "mm-dd-yy" gets an id of its own.
     /// </summary>
     public static bool TryGetBuiltInId(string code, out int id)
     {
@@ -73,8 +73,8 @@ internal static class NumberFormats
     }
 
     /// <summary>
-    /// Inbyggda datumformat. 27–36 och 50–58 är östasiatiska datumformat utan fast kod.
-    /// 46 ([h]:mm:ss) är en varaktighet, inte en tidpunkt, och räknas inte.
+    /// Built-in date formats. 27–36 and 50–58 are East Asian date formats without a fixed code.
+    /// 46 ([h]:mm:ss) is a duration, not a point in time, and does not count.
     /// </summary>
     public static bool IsDateId(int id)
     {
@@ -82,10 +82,10 @@ internal static class NumberFormats
     }
 
     /// <summary>
-    /// Om en formatkod visar ett datum eller en tid. Bara första avsnittet (före ;) räknas.
-    /// Text inom citattecken, tecken efter \, _ eller *, och [..] (färg, språk, villkor) hoppas
-    /// över. Hittas d, m, y, h eller s är det ett datum, utom när koden har [h], [m] eller [s]:
-    /// då är det en varaktighet, som läses som tal.
+    /// Whether a format code shows a date or a time. Only the first section (before ;) counts.
+    /// Quoted text, the character after \, _ or *, and [..] (colour, locale, condition) are
+    /// skipped. A d, m, y, h or s makes it a date, except when the code has [h], [m] or [s]:
+    /// then it is a duration, which is read as a number.
     /// </summary>
     public static bool IsDateFormat(string code)
     {

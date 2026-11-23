@@ -692,7 +692,7 @@ public sealed class MappedRow
             return false;
         }
 
-        // Via text med 15 siffror, som Excel visar dem, så att 0.1 blir 0.1m och inte 0.1000000000000000055m.
+        // Through text with 15 digits, as Excel shows them, so that 0.1 becomes 0.1m and not 0.1000000000000000055m.
         value = decimal.Parse(number.ToString("G15", CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture);
 
         return true;

@@ -1,6 +1,6 @@
 <Project>
 
-  <!-- Delad metadata för biblioteket och testerna. -->
+  <!-- Shared metadata for the library and the tests. -->
   <PropertyGroup>
     <Authors>Marcus Lindh</Authors>
     <Company>Marcus Lindh</Company>
@@ -19,8 +19,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Byggtidsregler, inget beroende i paketet. publish.ps1 failar om något annat än
-         Avig.Result tar sig in i nuspec:en. -->
+    <!-- Build-time rules, not a dependency of the package. publish.ps1 fails if anything but
+         Avig.Result makes it into the nuspec. -->
     <PackageReference Include="Avig.Analyzers" Version="1.2.0">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>

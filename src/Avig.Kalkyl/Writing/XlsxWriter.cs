@@ -148,7 +148,7 @@ public sealed class XlsxWriter : IAsyncDisposable
 
         if (sheets.Count == 0)
         {
-            // En arbetsbok utan blad öppnas inte av Excel.
+            // Excel does not open a workbook without sheets.
             SheetWriter empty = await AddSheetCoreAsync("Sheet1", cancellationToken);
             await empty.FinishAsync(cancellationToken);
         }
@@ -269,7 +269,7 @@ public sealed class XlsxWriter : IAsyncDisposable
 
         if (sheets.Exists(sheet => sheet.HasFormulas == true) == true)
         {
-            // Formler utan sparat resultat ska räknas när filen öppnas.
+            // Formulas without a stored result are to be calculated when the file is opened.
             await xml.WriteStartElementAsync(null, "calcPr", null);
             await xml.WriteAttributeStringAsync(null, "calcId", null, "191029");
             await xml.WriteAttributeStringAsync(null, "fullCalcOnLoad", null, "1");

@@ -1,6 +1,6 @@
 namespace Avig.Kalkyl.Internal;
 
-/// <summary>Namnrymder, relationstyper och innehållstyper i en xlsx-fil.</summary>
+/// <summary>Namespaces, relationship types and content types in an xlsx file.</summary>
 internal static class Ooxml
 {
     public const string SpreadsheetNamespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
@@ -18,15 +18,15 @@ internal static class Ooxml
     public const string RelationshipsContentType = "application/vnd.openxmlformats-package.relationships+xml";
 
     /// <summary>
-    /// Relationstyper jämförs på sista delen, eftersom Strict OOXML (ISO 29500 Strict) har
-    /// andra namnrymder (purl.oclc.org) men samma namn på slutet.
+    /// Relationship types are compared on their last segment, because Strict OOXML (ISO 29500 Strict)
+    /// has other namespaces (purl.oclc.org) but the same name at the end.
     /// </summary>
     public static bool IsRelationship(string type, string kind)
     {
         return type.EndsWith("/" + kind, StringComparison.Ordinal);
     }
 
-    /// <summary>Sökvägen till .rels-filen för en del, till exempel xl/_rels/workbook.xml.rels.</summary>
+    /// <summary>The path of a part's .rels file, for example xl/_rels/workbook.xml.rels.</summary>
     public static string RelationshipsPath(string partPath)
     {
         int slash = partPath.LastIndexOf('/');
@@ -40,8 +40,8 @@ internal static class Ooxml
     }
 
     /// <summary>
-    /// Löser ett mål i en relation mot delen som pekar på det. Ett mål som börjar med / gäller
-    /// från paketets rot; annars relativt delens mapp, med .. tillåtet.
+    /// Resolves a relationship target against the part that points to it. A target starting with /
+    /// is from the package root; otherwise relative to the part's folder, with .. allowed.
     /// </summary>
     public static string ResolveTarget(string sourcePartPath, string target)
     {

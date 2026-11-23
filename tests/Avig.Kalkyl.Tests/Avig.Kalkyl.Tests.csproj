@@ -12,8 +12,8 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <!-- Bara i testerna: Microsofts schemavalidator kontrollerar att filerna vi skriver är
-         giltig OOXML. Biblioteket självt beror inte på det. -->
+    <!-- Tests only: Microsoft's schema validator checks that the files we write are
+         valid OOXML. The library itself does not depend on it. -->
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
   </ItemGroup>
@@ -26,8 +26,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Avig.Kalkyl\Avig.Kalkyl.csproj" />
-    <!-- Både som generator (för [KalkylRow]-typerna i testerna) och som vanlig referens
-         (för testerna som kör generatorn på kod som ska ge diagnostik). -->
+    <!-- Both as a generator (for the [KalkylRow] types in the tests) and as a plain reference
+         (for the tests that run the generator on code that should produce diagnostics). -->
     <ProjectReference Include="..\..\src\Avig.Kalkyl.Generators\Avig.Kalkyl.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
   </ItemGroup>
 

@@ -52,8 +52,9 @@ nummer byts aldrig ut (se `publish.ps1` och `release.ps1`).
 - **Ingen `?:`** (AVIG0024) — skriv en if-sats eller ett switch-uttryck
 - CRLF och UTF-8. Filer som skapas med verktyg som skriver LF måste konverteras, annars
   failar bygget på AVIG0006.
-- Allt som publiceras (README, `<Description>`, XML-dokumentationen på publika typer) är på
-  engelska. Kommentarer i koden, skripten och den här filen är på svenska.
+- **All XML-dokumentation och alla kommentarer är på engelska**, även på interna och privata
+  medlemmar, i projektfiler och i skripten. Det gäller också README och `<Description>`.
+  Bara den här filen och `docs/` är på svenska.
 
 Avig.Analyzers kör med alla AVIG-regler på `error`.
 

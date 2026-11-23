@@ -5,9 +5,9 @@ using System.Xml;
 namespace Avig.Kalkyl.Internal;
 
 /// <summary>
-/// Text i cellerna kan innehålla tecken som XML inte tillåter (till exempel \u0001). Excel
-/// skriver dem som _xHHHH_, och ett _x som redan står i texten och ser ut som en sådan kod
-/// skrivs som _x005F_ så att det inte avkodas av misstag.
+/// Cell text can hold characters XML does not allow (for example \u0001). Excel writes them
+/// as _xHHHH_, and an _x already in the text that looks like such a code is written as
+/// _x005F_ so that it is not decoded by mistake.
 /// </summary>
 internal static class CellText
 {

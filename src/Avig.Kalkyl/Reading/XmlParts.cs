@@ -6,8 +6,8 @@ using System.Xml;
 namespace Avig.Kalkyl.Reading;
 
 /// <summary>
-/// Hjälp för att läsa XML-delarna i paketet. Element jämförs på lokalt namn, inte namnrymd,
-/// så att både vanlig och Strict OOXML går att läsa.
+/// Helpers for reading the XML parts of the package. Elements are compared by local name, not namespace,
+/// so that both transitional and Strict OOXML can be read.
 /// </summary>
 internal static class XmlParts
 {
@@ -15,8 +15,8 @@ internal static class XmlParts
     {
         Async = true,
 
-        // Ingen DTD och ingen resolver: en xlsx kommer ofta utifrån, och en DTD är vägen in
-        // för XXE och "billion laughs".
+        // No DTD and no resolver: an xlsx often comes from outside, and a DTD is the way in
+        // for XXE and "billion laughs".
         DtdProcessing = DtdProcessing.Prohibit,
         XmlResolver = null,
         IgnoreComments = true,
@@ -33,7 +33,7 @@ internal static class XmlParts
             return true;
         }
 
-        // Delnamn i OPC är skiftlägesokänsliga, och vissa program skriver \ i stället för /.
+        // Part names in OPC are case-insensitive, and some programs write \ instead of /.
         foreach (ZipArchiveEntry candidate in archive.Entries)
         {
             if (string.Equals(candidate.FullName.Replace('\\', '/'), path, StringComparison.OrdinalIgnoreCase) == true)
@@ -57,7 +57,7 @@ internal static class XmlParts
         return reader.NodeType == XmlNodeType.EndElement && reader.Depth == depth;
     }
 
-    /// <summary>r:id-attributet, vars namnrymd skiljer sig mellan vanlig och Strict OOXML.</summary>
+    /// <summary>The r:id attribute, whose namespace differs between transitional and Strict OOXML.</summary>
     public static bool TryGetRelationshipId(XmlReader reader, [NotNullWhen(true)] out string? id)
     {
         id = null;
@@ -81,9 +81,9 @@ internal static class XmlParts
     }
 
     /// <summary>
-    /// Läser texten i en &lt;si&gt; eller &lt;is&gt;: antingen en &lt;t&gt; eller flera &lt;r&gt;&lt;t&gt;
-    /// (formaterad text). Fonetisk text (&lt;rPh&gt;, för japanska) tas inte med. Läsaren står
-    /// efteråt på elementets slut.
+    /// Reads the text in an &lt;si&gt; or &lt;is&gt;: either one &lt;t&gt; or several &lt;r&gt;&lt;t&gt;
+    /// (formatted text). Phonetic text (&lt;rPh&gt;, for Japanese) is left out. Afterwards the reader
+    /// is on the element's end.
     /// </summary>
     public static async Task<string> ReadRichTextAsync(XmlReader reader)
     {
@@ -121,7 +121,7 @@ internal static class XmlParts
         return Internal.CellText.Decode(text.ToString());
     }
 
-    /// <summary>Relationerna i en .rels-fil: id till (typ, mål).</summary>
+    /// <summary>The relationships in a .rels file: id to (type, target).</summary>
     public static async Task<Dictionary<string, (string Type, string Target)>> ReadRelationshipsAsync(ZipArchive archive, string relsPath, CancellationToken cancellationToken)
     {
         Dictionary<string, (string Type, string Target)> relationships = new(StringComparer.Ordinal);

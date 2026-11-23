@@ -41,9 +41,10 @@ public sealed class SheetReader
     {
         await using Stream stream = await entry.OpenAsync(cancellationToken);
         using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+        CellContext context = new(sharedStrings, styles, uses1904, Info.Name);
         int previousRow = -1;
 
-        while (await ReadOrThrowAsync(reader) == true)
+        while (await CellXml.ReadAsync(reader, context) == true)
         {
             if (XmlParts.IsElement(reader, "row") == false)
             {
@@ -67,35 +68,35 @@ public sealed class SheetReader
                 continue;
             }
 
-            yield return await ReadRowAsync(reader, rowIndex);
+            yield return await ReadRowAsync(reader, rowIndex, context);
         }
     }
 
-    private async Task<Row> ReadRowAsync(XmlReader reader, int rowIndex)
+    private static async Task<Row> ReadRowAsync(XmlReader reader, int rowIndex, CellContext context)
     {
         int depth = reader.Depth;
         List<(int Column, Cell Cell)> cells = [];
         int previousColumn = -1;
         int lastColumn = -1;
-        await ReadOrThrowAsync(reader);
+        await CellXml.ReadAsync(reader, context);
 
         while (XmlParts.IsEnd(reader, depth) == false)
         {
             if (XmlParts.IsElement(reader, "c") == true)
             {
-                (int column, Cell cell) = await ReadCellAsync(reader, rowIndex, previousColumn);
-                previousColumn = column;
+                ParsedCell parsed = await CellXml.ReadCellAsync(reader, rowIndex, previousColumn, context);
+                previousColumn = parsed.Column;
 
-                if (cell.IsEmpty == false)
+                if (parsed.Cell.IsEmpty == false)
                 {
-                    cells.Add((column, cell));
-                    lastColumn = Math.Max(lastColumn, column);
+                    cells.Add((parsed.Column, parsed.Cell));
+                    lastColumn = Math.Max(lastColumn, parsed.Column);
                 }
 
                 continue;
             }
 
-            if (await ReadOrThrowAsync(reader) == false)
+            if (await CellXml.ReadAsync(reader, context) == false)
             {
                 break;
             }
@@ -109,166 +110,5 @@ public sealed class SheetReader
         }
 
         return new Row(rowIndex, dense);
-    }
-
-    private async Task<(int Column, Cell Cell)> ReadCellAsync(XmlReader reader, int rowIndex, int previousColumn)
-    {
-        int column = previousColumn + 1;
-        string? reference = reader.GetAttribute("r");
-
-        if (reference is not null)
-        {
-            int letters = 0;
-
-            while (letters < reference.Length && char.IsAsciiLetter(reference[letters]) == true)
-            {
-                letters++;
-            }
-
-            if (CellAddress.TryParseColumn(reference.AsSpan(0, letters), out int parsed) == true)
-            {
-                column = parsed;
-            }
-        }
-
-        if (column >= CellAddress.MaxColumns)
-        {
-            throw Damaged(rowIndex, CellAddress.MaxColumns - 1, "the row has more cells than a sheet has columns");
-        }
-
-        string? type = reader.GetAttribute("t");
-        int.TryParse(reader.GetAttribute("s"), NumberStyles.None, CultureInfo.InvariantCulture, out int styleIndex);
-        string? stored = null;
-        string? formula = null;
-        string? inline = null;
-
-        if (reader.IsEmptyElement == false)
-        {
-            int depth = reader.Depth;
-            await ReadOrThrowAsync(reader);
-
-            while (XmlParts.IsEnd(reader, depth) == false)
-            {
-                if (XmlParts.IsElement(reader, "v") == true)
-                {
-                    stored = await reader.ReadElementContentAsStringAsync();
-
-                    continue;
-                }
-
-                if (XmlParts.IsElement(reader, "f") == true)
-                {
-                    // En delad formel (t="shared") står bara i första cellen; de andra har ett
-                    // tomt <f si="0"/>. Formeltexten för dem räknas fram av formelmotorn senare.
-                    string text = await reader.ReadElementContentAsStringAsync();
-
-                    if (text.Length > 0)
-                    {
-                        formula = CellText.Decode(text);
-                    }
-
-                    continue;
-                }
-
-                if (XmlParts.IsElement(reader, "is") == true)
-                {
-                    inline = await XmlParts.ReadRichTextAsync(reader);
-                }
-
-                if (await ReadOrThrowAsync(reader) == false)
-                {
-                    break;
-                }
-            }
-        }
-
-        await ReadOrThrowAsync(reader);
-        CellValue value = ToValue(type, stored, inline, styleIndex, rowIndex, column);
-
-        return (column, Cell.Create(value, formula, styles.StyleAt(styleIndex)));
-    }
-
-    private CellValue ToValue(string? type, string? stored, string? inline, int styleIndex, int rowIndex, int column)
-    {
-        switch (type)
-        {
-            case "s":
-                if (int.TryParse(stored, NumberStyles.None, CultureInfo.InvariantCulture, out int index) == false || index >= sharedStrings.Count)
-                {
-                    throw Damaged(rowIndex, column, $"it points to shared text {stored}, which does not exist");
-                }
-
-                return CellValue.Text(sharedStrings[index]);
-
-            case "inlineStr":
-                return CellValue.Text(inline ?? string.Empty);
-
-            case "str":
-                return CellValue.Text(CellText.Decode(stored ?? string.Empty));
-
-            case "b":
-                return CellValue.Bool(stored is "1" or "true");
-
-            case "e":
-                return ToError(stored);
-
-            case "d":
-                if (DateTime.TryParse(stored, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime isoDate) == true)
-                {
-                    return CellValue.Date(isoDate);
-                }
-
-                throw Damaged(rowIndex, column, $"'{stored}' is not a date");
-
-            default:
-                if (string.IsNullOrEmpty(stored) == true)
-                {
-                    return CellValue.Empty;
-                }
-
-                if (double.TryParse(stored, NumberStyles.Float, CultureInfo.InvariantCulture, out double number) == false)
-                {
-                    throw Damaged(rowIndex, column, $"'{stored}' is not a number");
-                }
-
-                if (styles.IsDate(styleIndex) == true && ExcelDate.TryFromSerial(number, uses1904, out DateTime date) == true)
-                {
-                    return CellValue.Date(date);
-                }
-
-                return CellValue.Number(number);
-        }
-    }
-
-    private static CellValue ToError(string? stored)
-    {
-        try
-        {
-            return CellValue.Error(stored ?? "#N/A");
-        }
-        catch (ArgumentException)
-        {
-            // Ett felvärde från en nyare Excel-version som paketet inte känner till.
-            return CellValue.Error("#N/A");
-        }
-    }
-
-    private InvalidDataException Damaged(int rowIndex, int column, string problem)
-    {
-        CellAddress address = new(Math.Min(rowIndex, CellAddress.MaxRows - 1), column);
-
-        return new InvalidDataException($"The file is damaged: cell {address} (row {rowIndex}, column {column}) in sheet '{Info.Name}' cannot be read, because {problem}.");
-    }
-
-    private async Task<bool> ReadOrThrowAsync(XmlReader reader)
-    {
-        try
-        {
-            return await reader.ReadAsync();
-        }
-        catch (XmlException exception)
-        {
-            throw new InvalidDataException($"The file is damaged: the sheet '{Info.Name}' has broken XML at line {exception.LineNumber}.", exception);
-        }
     }
 }

@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Källgeneratorn för [KalkylRow]. Måste vara netstandard2.0: den laddas i kompilatorn, som
-    inte kan ladda nyare ramverk. Den packas inte som eget paket utan följer med Avig.Kalkyl
+    The source generator for [KalkylRow]. Must be netstandard2.0: it is loaded into the compiler,
+    which cannot load newer frameworks. It is not packed on its own; it ships inside Avig.Kalkyl
     under analyzers/dotnet/cs.
   -->
   <PropertyGroup>
@@ -13,7 +13,7 @@
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <IsRoslynComponent>true</IsRoslynComponent>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <!-- RS2008: KALK001–KALK004 beskrivs i README, inte i release-spårningsfiler. -->
+    <!-- RS2008: KALK001–KALK004 are described in the README, not in release tracking files. -->
     <NoWarn>$(NoWarn);RS2008</NoWarn>
   </PropertyGroup>
 

@@ -44,7 +44,7 @@ public sealed class SheetWriter
 
     internal bool HasFormulas { get; private set; }
 
-    /// <summary>Nedre högra hörnet i autofiltret, som alltid börjar i A1. Sätts när bladet avslutas.</summary>
+    /// <summary>The bottom-right corner of the autofilter, which always starts at A1. Set when the sheet is finished.</summary>
     internal CellAddress? AutoFilterEnd { get; private set; }
 
     /// <summary>Sets the width of a column, in characters of the default font. Must come before the first row.</summary>
@@ -118,7 +118,13 @@ public sealed class SheetWriter
                 continue;
             }
 
-            await WriteCellAsync(cell, CellAddress.ColumnName(column) + rowNumber);
+            if (cell.Formula is not null)
+            {
+                HasFormulas = true;
+            }
+
+            int styleIndex = styles.GetIndex(cell.Style, CellXml.DefaultFormat(cell.Value));
+            await CellXml.WriteCellAsync(xml, cell, CellAddress.ColumnName(column) + rowNumber, styleIndex, false);
 
             if (column > lastColumn)
             {
@@ -145,9 +151,7 @@ public sealed class SheetWriter
         {
             CellAddress end = new(RowCount - 1, lastColumn);
             AutoFilterEnd = end;
-            await xml.WriteStartElementAsync(null, "autoFilter", null);
-            await xml.WriteAttributeStringAsync(null, "ref", null, "A1:" + end.ToString());
-            await xml.WriteEndElementAsync();
+            await SheetXml.WriteAutoFilterAsync(xml, end);
         }
 
         await xml.WriteEndElementAsync();
@@ -169,207 +173,10 @@ public sealed class SheetWriter
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "worksheet", Ooxml.SpreadsheetNamespace);
         await xml.WriteAttributeStringAsync("xmlns", "r", null, Ooxml.RelationshipsNamespace);
-        await WriteSheetViewAsync();
-
-        if (columnWidths.Count > 0)
-        {
-            await xml.WriteStartElementAsync(null, "cols", null);
-
-            foreach ((int column, double width) in columnWidths)
-            {
-                string number = (column + 1).ToString(CultureInfo.InvariantCulture);
-                await xml.WriteStartElementAsync(null, "col", null);
-                await xml.WriteAttributeStringAsync(null, "min", null, number);
-                await xml.WriteAttributeStringAsync(null, "max", null, number);
-                await xml.WriteAttributeStringAsync(null, "width", null, width.ToString("R", CultureInfo.InvariantCulture));
-                await xml.WriteAttributeStringAsync(null, "customWidth", null, "1");
-                await xml.WriteEndElementAsync();
-            }
-
-            await xml.WriteEndElementAsync();
-        }
-
+        await SheetXml.WriteSheetViewsAsync(xml, Index == 0, frozenRows, frozenColumns);
+        List<ColumnRange> ranges = columnWidths.Select(pair => new ColumnRange(pair.Key, pair.Key, pair.Value, [])).ToList();
+        await SheetXml.WriteColumnsAsync(xml, ranges);
         await xml.WriteStartElementAsync(null, "sheetData", null);
-    }
-
-    private async Task WriteSheetViewAsync()
-    {
-        await xml.WriteStartElementAsync(null, "sheetViews", null);
-        await xml.WriteStartElementAsync(null, "sheetView", null);
-
-        if (Index == 0)
-        {
-            await xml.WriteAttributeStringAsync(null, "tabSelected", null, "1");
-        }
-
-        await xml.WriteAttributeStringAsync(null, "workbookViewId", null, "0");
-
-        if (frozenRows > 0 || frozenColumns > 0)
-        {
-            string activePane = "bottomRight";
-
-            if (frozenColumns == 0)
-            {
-                activePane = "bottomLeft";
-            }
-            else if (frozenRows == 0)
-            {
-                activePane = "topRight";
-            }
-
-            await xml.WriteStartElementAsync(null, "pane", null);
-
-            if (frozenColumns > 0)
-            {
-                await xml.WriteAttributeStringAsync(null, "xSplit", null, frozenColumns.ToString(CultureInfo.InvariantCulture));
-            }
-
-            if (frozenRows > 0)
-            {
-                await xml.WriteAttributeStringAsync(null, "ySplit", null, frozenRows.ToString(CultureInfo.InvariantCulture));
-            }
-
-            await xml.WriteAttributeStringAsync(null, "topLeftCell", null, new CellAddress(frozenRows, frozenColumns).ToString());
-            await xml.WriteAttributeStringAsync(null, "activePane", null, activePane);
-            await xml.WriteAttributeStringAsync(null, "state", null, "frozen");
-            await xml.WriteEndElementAsync();
-            await xml.WriteStartElementAsync(null, "selection", null);
-            await xml.WriteAttributeStringAsync(null, "pane", null, activePane);
-            await xml.WriteEndElementAsync();
-        }
-
-        await xml.WriteEndElementAsync();
-        await xml.WriteEndElementAsync();
-    }
-
-    private async Task WriteCellAsync(Cell cell, string reference)
-    {
-        CellValue value = cell.Value;
-        string? defaultFormat = null;
-
-        if (value.TryGetDate(out DateTime date) == true)
-        {
-            defaultFormat = NumberFormats.DateFormat;
-
-            if (date.TimeOfDay != TimeSpan.Zero)
-            {
-                defaultFormat = NumberFormats.DateTimeFormat;
-            }
-        }
-
-        int styleIndex = styles.GetIndex(cell.Style, defaultFormat);
-        await xml.WriteStartElementAsync(null, "c", null);
-        await xml.WriteAttributeStringAsync(null, "r", null, reference);
-
-        if (styleIndex != 0)
-        {
-            await xml.WriteAttributeStringAsync(null, "s", null, styleIndex.ToString(CultureInfo.InvariantCulture));
-        }
-
-        if (cell.Formula is not null)
-        {
-            HasFormulas = true;
-            await WriteFormulaCellAsync(cell.Formula, value);
-            await xml.WriteEndElementAsync();
-
-            return;
-        }
-
-        switch (value.Kind)
-        {
-            case CellKind.Text:
-                value.TryGetText(out string? text);
-                await xml.WriteAttributeStringAsync(null, "t", null, "inlineStr");
-                await xml.WriteStartElementAsync(null, "is", null);
-                await xml.WriteStartElementAsync(null, "t", null);
-                await xml.WriteAttributeStringAsync("xml", "space", null, "preserve");
-                await xml.WriteStringAsync(CellText.Encode(text!));
-                await xml.WriteEndElementAsync();
-                await xml.WriteEndElementAsync();
-
-                break;
-
-            case CellKind.Empty:
-                break;
-
-            default:
-                await WriteTypeAttributeAsync(value.Kind);
-                await xml.WriteElementStringAsync(null, "v", null, StoredValue(value));
-
-                break;
-        }
-
-        await xml.WriteEndElementAsync();
-    }
-
-    private async Task WriteFormulaCellAsync(string formula, CellValue cached)
-    {
-        if (cached.Kind == CellKind.Text)
-        {
-            await xml.WriteAttributeStringAsync(null, "t", null, "str");
-        }
-        else
-        {
-            await WriteTypeAttributeAsync(cached.Kind);
-        }
-
-        await xml.WriteElementStringAsync(null, "f", null, CellText.Encode(formula));
-
-        if (cached.IsEmpty == false)
-        {
-            await xml.WriteElementStringAsync(null, "v", null, StoredValue(cached));
-        }
-    }
-
-    private async Task WriteTypeAttributeAsync(CellKind kind)
-    {
-        if (kind == CellKind.Bool)
-        {
-            await xml.WriteAttributeStringAsync(null, "t", null, "b");
-        }
-        else if (kind == CellKind.Error)
-        {
-            await xml.WriteAttributeStringAsync(null, "t", null, "e");
-        }
-    }
-
-    private static string StoredValue(CellValue value)
-    {
-        switch (value.Kind)
-        {
-            case CellKind.Number:
-                value.TryGetNumber(out double number);
-
-                return number.ToString("R", CultureInfo.InvariantCulture);
-
-            case CellKind.Date:
-                value.TryGetDate(out DateTime date);
-
-                return ExcelDate.ToSerial(date).ToString("R", CultureInfo.InvariantCulture);
-
-            case CellKind.Bool:
-                value.TryGetBool(out bool flag);
-
-                if (flag == true)
-                {
-                    return "1";
-                }
-
-                return "0";
-
-            case CellKind.Text:
-                value.TryGetText(out string? text);
-
-                return CellText.Encode(text!);
-
-            case CellKind.Error:
-                value.TryGetError(out string? code);
-
-                return code!;
-
-            default:
-                return string.Empty;
-        }
     }
 
     private void ThrowIfStarted(string operation)

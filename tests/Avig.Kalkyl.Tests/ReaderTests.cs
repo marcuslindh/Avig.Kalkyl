@@ -1,8 +1,8 @@
 namespace Avig.Kalkyl.Tests;
 
 /// <summary>
-/// Filer byggda för hand som de ser ut när Excel och andra program har skrivit dem: delade
-/// strängar, celler utan adress, delade formler, egna datumformat och Strict OOXML.
+/// Files built by hand the way Excel and other programs write them: shared
+/// strings, cells without addresses, shared formulas, custom date formats and Strict OOXML.
 /// </summary>
 public class ReaderTests
 {
@@ -72,7 +72,7 @@ public class ReaderTests
                   <sheetData>
                     <row r="1" spans="1:3"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row>
                     <row r="3"><c r="A3" s="1"><v>45000</v></c><c s="2"><v>45000.5</v></c><c s="3"><v>12.5</v></c><c s="4"><v>1.5</v></c></row>
-                    <row><c t="b"><v>1</v></c><c t="e"><v>#DIV/0!</v></c><c t="str"><f>A1&amp;"x"</f><v>Namnx</v></c><c><f t="shared" ref="D4:D5" si="0">1+1</f><v>2</v></c></row>
+                    <row><c t="b"><v>1</v></c><c t="e"><v>#DIV/0!</v></c><c t="str"><f>A1&amp;"x"</f><v>Namnx</v></c><c><f t="shared" ref="D4:D5" si="0">$A$1&amp;A3</f><v>2</v></c></row>
                     <row r="5"><c r="D5"><f t="shared" si="0"/><v>2</v></c><c r="E5" t="inlineStr"><is><t>inline</t></is></c><c r="F5" t="s"><v>2</v></c></row>
                     <row r="6" ht="30" customHeight="1"/>
                   </sheetData>
@@ -120,9 +120,9 @@ public class ReaderTests
         Assert.Equal("#DIV/0!", error);
         Assert.Equal((CellValue)"Namnx", rows[2][2].Value);
         Assert.Equal("A1&\"x\"", rows[2][2].Formula);
-        Assert.Equal("1+1", rows[2][3].Formula);
+        Assert.Equal("$A$1&A3", rows[2][3].Formula);
 
-        Assert.Null(rows[3][3].Formula);
+        Assert.Equal("$A$1&A4", rows[3][3].Formula);
         Assert.Equal((CellValue)2, rows[3][3].Value);
         Assert.Equal((CellValue)"inline", rows[3][4].Value);
         Assert.Equal((CellValue)"\u0001", rows[3][5].Value);
