@@ -41,11 +41,11 @@ public sealed class XlsxReader : IAsyncDisposable
     private readonly Stream stream;
     private readonly bool leaveOpen;
     private readonly ZipArchive archive;
-    private readonly List<(SheetInfo Info, string Path)> sheets;
+    private readonly List<SheetPart> sheets;
     private readonly IReadOnlyList<string> sharedStrings;
     private readonly StyleTable styles;
 
-    private XlsxReader(Stream stream, bool leaveOpen, ZipArchive archive, List<(SheetInfo Info, string Path)> sheets, IReadOnlyList<string> sharedStrings, StyleTable styles, bool uses1904Dates)
+    private XlsxReader(Stream stream, bool leaveOpen, ZipArchive archive, List<SheetPart> sheets, IReadOnlyList<string> sharedStrings, StyleTable styles, bool uses1904Dates, string workbookPath)
     {
         this.stream = stream;
         this.leaveOpen = leaveOpen;
@@ -55,6 +55,7 @@ public sealed class XlsxReader : IAsyncDisposable
         this.styles = styles;
         Uses1904Dates = uses1904Dates;
         Sheets = sheets.ConvertAll(sheet => sheet.Info);
+        WorkbookPath = workbookPath;
     }
 
     /// <summary>The worksheets, in tab order. Chart sheets are not listed.</summary>
@@ -62,6 +63,17 @@ public sealed class XlsxReader : IAsyncDisposable
 
     /// <summary>True when the workbook counts dates from 1904, as old Mac files do. Dates are converted either way.</summary>
     public bool Uses1904Dates { get; }
+
+    internal ZipArchive Archive => archive;
+
+    internal IReadOnlyList<string> SharedStrings => sharedStrings;
+
+    internal StyleTable Styles => styles;
+
+    internal string WorkbookPath { get; }
+
+    internal IReadOnlyList<SheetPart> SheetParts => sheets;
+
 
     /// <summary>Opens a file.</summary>
     /// <param name="path">The file.</param>
@@ -173,7 +185,7 @@ public sealed class XlsxReader : IAsyncDisposable
             return Result<SheetReader>.NotFound($"There is no sheet {index}. The workbook has {sheets.Count} worksheet(s), numbered from 0.");
         }
 
-        (SheetInfo info, string path) = sheets[index];
+        (SheetInfo info, string path, _, _) = sheets[index];
 
         if (XmlParts.TryFindEntry(archive, path, out ZipArchiveEntry? entry) == false)
         {
@@ -279,10 +291,10 @@ public sealed class XlsxReader : IAsyncDisposable
         }
 
         Dictionary<string, (string Type, string Target)> workbookRelationships = await XmlParts.ReadRelationshipsAsync(archive, Ooxml.RelationshipsPath(workbookPath), cancellationToken);
-        (List<(string Name, string RelationshipId, SheetVisibility Visibility)> declared, bool uses1904) = await ReadWorkbookAsync(workbookEntry, cancellationToken);
-        List<(SheetInfo Info, string Path)> sheets = [];
+        (List<(string Name, string RelationshipId, int SheetId, SheetVisibility Visibility)> declared, bool uses1904) = await ReadWorkbookAsync(workbookEntry, cancellationToken);
+        List<SheetPart> sheets = [];
 
-        foreach ((string name, string relationshipId, SheetVisibility visibility) in declared)
+        foreach ((string name, string relationshipId, int sheetId, SheetVisibility visibility) in declared)
         {
             if (workbookRelationships.TryGetValue(relationshipId, out (string Type, string Target) relationship) == false)
             {
@@ -294,7 +306,7 @@ public sealed class XlsxReader : IAsyncDisposable
                 continue;
             }
 
-            sheets.Add((new SheetInfo(name, sheets.Count, visibility), Ooxml.ResolveTarget(workbookPath, relationship.Target)));
+            sheets.Add(new SheetPart(new SheetInfo(name, sheets.Count, visibility), Ooxml.ResolveTarget(workbookPath, relationship.Target), relationshipId, sheetId));
         }
 
         IReadOnlyList<string> sharedStrings = [];
@@ -314,12 +326,12 @@ public sealed class XlsxReader : IAsyncDisposable
             }
         }
 
-        return new XlsxReader(source, leaveOpen, archive, sheets, sharedStrings, styles, uses1904);
+        return new XlsxReader(source, leaveOpen, archive, sheets, sharedStrings, styles, uses1904, workbookPath);
     }
 
-    private static async Task<(List<(string Name, string RelationshipId, SheetVisibility Visibility)> Sheets, bool Uses1904)> ReadWorkbookAsync(ZipArchiveEntry entry, CancellationToken cancellationToken)
+    private static async Task<(List<(string Name, string RelationshipId, int SheetId, SheetVisibility Visibility)> Sheets, bool Uses1904)> ReadWorkbookAsync(ZipArchiveEntry entry, CancellationToken cancellationToken)
     {
-        List<(string, string, SheetVisibility)> sheets = [];
+        List<(string, string, int, SheetVisibility)> sheets = [];
         bool uses1904 = false;
         await using Stream stream = await entry.OpenAsync(cancellationToken);
         using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
@@ -350,7 +362,8 @@ public sealed class XlsxReader : IAsyncDisposable
                     _ => SheetVisibility.Visible,
                 };
 
-                sheets.Add((name, relationshipId, visibility));
+                int.TryParse(reader.GetAttribute("sheetId"), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int sheetId);
+                sheets.Add((name, relationshipId, sheetId, visibility));
             }
         }
 
@@ -375,3 +388,6 @@ public sealed class XlsxReader : IAsyncDisposable
         return strings;
     }
 }
+
+/// <summary>A worksheet's entry in the workbook: its info, part path, relationship id and sheet id.</summary>
+internal sealed record SheetPart(SheetInfo Info, string Path, string RelationshipId, int SheetId);

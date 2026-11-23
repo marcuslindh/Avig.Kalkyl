@@ -174,7 +174,8 @@ public sealed class XlsxWriter : IAsyncDisposable
         await CompleteAsync(CancellationToken.None);
     }
 
-    private static Result ValidateName(string name)
+    /// <summary>Whether Excel accepts a sheet name. Shared with the document model.</summary>
+    internal static Result ValidateName(string name)
     {
         if (name.Length == 0 || name.Length > 31)
         {

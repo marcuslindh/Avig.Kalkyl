@@ -29,7 +29,8 @@ public readonly struct Cell : IEquatable<Cell>
     public string? Formula { get; }
 
     /// <summary>
-    /// How the cell looks. When reading, only <see cref="Kalkyl.Style.NumberFormat"/> is filled in.
+    /// How the cell looks. When reading, font, fill, number format and alignment are filled in;
+    /// borders, theme colours and indexed colours are not.
     /// </summary>
     public Style Style => style ?? Style.Default;
 
