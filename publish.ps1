@@ -1,29 +1,29 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Bygger, testar, packar och formkontrollerar Avig.Kalkyl.
+    Builds, tests, packs and shape-checks Avig.Kalkyl.
 
 .DESCRIPTION
-    Skriptet pushar aldrig sjalvt. Publiceringen till nuget.org gors av
-    .github/workflows/publish.yml nar en v-tagg skjuts upp, och den taggen satts av
-    release.ps1. Det har skriptet stannar vid ett verifierat paket i det lokala flodet.
+    The script never pushes on its own. Publishing to nuget.org is done by
+    .github/workflows/publish.yml when a v-tag is pushed, and that tag is set by
+    release.ps1. This script stops at a verified package in the local feed.
 
-    Formkontrollen ar sjalva poangen. Ett av skalen till att Avig.Kalkyl finns ar att NPOI
-    och ClosedXML drar in fem till tio paket var. Kontrollen failar darfor pa allt utom ett
-    paket med lib/net10.0/Avig.Kalkyl.dll, en README och exakt ett beroende: Avig.Result.
+    The shape check is the whole point. One of the reasons Avig.Kalkyl exists is that NPOI
+    and ClosedXML each pull in five to ten packages. The check therefore fails on anything but
+    a package with lib/net10.0/Avig.Kalkyl.dll, a README and exactly one dependency: Avig.Result.
 
 .PARAMETER NoBump
-    Behall nuvarande version i stallet for att hoja patch-numret. Workflowen kor med den
-    har flaggan: versionen ar redan satt och taggad av release.ps1.
+    Keep the current version instead of bumping the patch number. The workflow runs with this
+    flag: the version is already set and tagged by release.ps1.
 
 .PARAMETER SkipTests
-    Hoppa over testkorningen. Anvand nar du redan kort dem.
+    Skip the test run. Use when you have already run them.
 
 .PARAMETER SkipVerify
-    Hoppa over formkontrollen av nupkg:en. Gor inte det utan ett specifikt skal.
+    Skip the shape check of the nupkg. Do not do that without a specific reason.
 
 .PARAMETER Feed
-    Katalog att kopiera det byggda paketet till for lokal rokprovning.
+    Directory to copy the built package to for local smoke testing.
 #>
 param(
     [switch]$NoBump,
@@ -46,10 +46,10 @@ Write-Host ""
 # --- [1/5] Version ---
 Write-Host "[1/5] Version" -ForegroundColor Yellow
 
-# XmlDocument.Load laser filens egen encoding-deklaration. Get-Content utan -Encoding gor
-# det inte: i Windows PowerShell 5.1 avkodas UTF-8 som ANSI och Save skriver tillbaka som
-# UTF-8, sa varje a-ring, a-umlaut, o-umlaut och tankstreck fordubblas vid varje bump. Sa
-# vaxte Medusa.Portal.csproj fran 2 kB till 1,1 MB pa sju versionsbumpar.
+# XmlDocument.Load reads the file's own encoding declaration. Get-Content without -Encoding
+# does not: in Windows PowerShell 5.1 UTF-8 is decoded as ANSI and Save writes it back as
+# UTF-8, so every a-ring, a-umlaut, o-umlaut and dash doubles on every bump. That is how
+# Medusa.Portal.csproj grew from 2 kB to 1.1 MB over seven version bumps.
 $csproj = New-Object System.Xml.XmlDocument
 $csproj.PreserveWhitespace = $true
 $csproj.Load((Resolve-Path $project))
@@ -73,11 +73,11 @@ if ($NoBump) {
     Write-Host "      $currentVersion -> $version" -ForegroundColor Yellow
 }
 
-# Ett redan publicerat paket far aldrig bytas ut under samma versionsnummer: den som
-# cachat det behaller sin kopia och kor annan kod an den som hamtar nytt. Tva olika
-# Avig.Kalkyl i omlopp utan att nagot syns i bygget. Galler aven efter en bump - ligger den
-# bumpade versionen redan i flodet har csproj:en och flodet glidit isar, och att packa
-# over ar da precis fel atgard.
+# An already published package must never be replaced under the same version number: anyone
+# who cached it keeps their copy and runs different code from anyone who fetches it fresh. Two
+# different Avig.Kalkyl in circulation without anything showing in the build. This applies
+# after a bump too - if the bumped version is already in the feed, the csproj and the feed
+# have drifted apart, and packing over it is exactly the wrong fix.
 $existing = Join-Path $Feed "Avig.Kalkyl.$version.nupkg"
 if (Test-Path $existing) {
     Write-Host "      FEL: Avig.Kalkyl $version finns redan i flodet." -ForegroundColor Red
@@ -90,7 +90,7 @@ if (Test-Path $existing) {
     exit 1
 }
 
-# --- [2/5] Tester ---
+# --- [2/5] Tests ---
 if ($SkipTests) {
     Write-Host "[2/5] Tester hoppas over" -ForegroundColor DarkYellow
 } else {
@@ -106,7 +106,7 @@ if ($SkipTests) {
 # --- [3/5] Pack ---
 Write-Host "[3/5] Packar..." -ForegroundColor Yellow
 
-# Gamla nupkg:er i bin\Release far inte ligga kvar och forvaxlas med den nya.
+# Old nupkgs in bin\Release must not be left behind and mistaken for the new one.
 if (Test-Path $packDir) {
     Get-ChildItem -Path $packDir -Filter "*.nupkg" -ErrorAction SilentlyContinue | Remove-Item -Force
     Get-ChildItem -Path $packDir -Filter "*.snupkg" -ErrorAction SilentlyContinue | Remove-Item -Force
@@ -125,7 +125,7 @@ if (-not $package) {
 }
 Write-Host "      $($package.Name)" -ForegroundColor Green
 
-# --- [4/5] Verifiera paketets form ---
+# --- [4/5] Verify the package shape ---
 if ($SkipVerify) {
     Write-Host "[4/5] Formkontroll hoppas over" -ForegroundColor DarkYellow
 } else {
@@ -151,15 +151,15 @@ if ($SkipVerify) {
         exit 1
     }
 
-    # Kallgeneratorn for [KalkylRow] maste folja med, annars kompilerar ingen typad mappning
-    # hos den som anvander paketet.
+    # The source generator for [KalkylRow] must be included, otherwise no typed mapping
+    # compiles for whoever uses the package.
     if (-not ($entries | Where-Object { $_ -eq "analyzers/dotnet/cs/Avig.Kalkyl.Generators.dll" })) {
         Write-Host "      FEL: analyzers/dotnet/cs/Avig.Kalkyl.Generators.dll saknas i paketet" -ForegroundColor Red
         exit 1
     }
 
-    # Avig.Result ar det enda tillatna beroendet. Allt annat - en zip-, XML- eller
-    # bildbibliotek - ar precis det som gor NPOI och ClosedXML tunga att dra in.
+    # Avig.Result is the only allowed dependency. Anything else - a zip, XML or image
+    # library - is exactly what makes NPOI and ClosedXML heavy to pull in.
     $deps = @($nuspec.package.metadata.dependencies.group.dependency) | Where-Object { $_ -ne $null }
     $foreign = @($deps | Where-Object { $_.id -ne "Avig.Result" })
     if ($foreign.Count -gt 0) {
@@ -173,13 +173,13 @@ if ($SkipVerify) {
         exit 1
     }
 
-    # README:n ar det enda den som hittar paketet i ett flode har att ga pa.
+    # The README is all that someone who finds the package in a feed has to go on.
     if (-not ($entries | Where-Object { $_ -eq "README.md" })) {
         Write-Host "      FEL: README.md saknas i paketet" -ForegroundColor Red
         exit 1
     }
 
-    # Licensen avgor om nagon far anvanda paketet. Utan den ar det oklart.
+    # The license decides whether anyone may use the package. Without it, that is unclear.
     if (-not $nuspec.package.metadata.license) {
         Write-Host "      FEL: licens saknas i nuspec:en" -ForegroundColor Red
         exit 1
@@ -188,7 +188,7 @@ if ($SkipVerify) {
     Write-Host "      lib/net10.0/Avig.Kalkyl.dll, README.md och licens finns, bara Avig.Result som beroende" -ForegroundColor Green
 }
 
-# --- [5/5] Kopiera till det lokala flodet ---
+# --- [5/5] Copy to the local feed ---
 Write-Host "[5/5] Kopierar till flodet..." -ForegroundColor Yellow
 if (-not (Test-Path $Feed)) {
     New-Item -Path $Feed -ItemType Directory | Out-Null

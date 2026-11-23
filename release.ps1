@@ -1,59 +1,59 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Gor en release: hojer versionen, verifierar paketet, commitar och taggar.
+    Makes a release: bumps the version, verifies the package, commits and tags.
 
 .DESCRIPTION
-    Taggen ar det som publicerar. En uppskjuten vX.Y.Z kor .github/workflows/publish.yml,
-    som bygger paketet igen pa en runner och pushar det till nuget.org via Trusted
+    The tag is what publishes. A pushed vX.Y.Z runs .github/workflows/publish.yml,
+    which builds the package again on a runner and pushes it to nuget.org via Trusted
     Publishing.
 
-    Skriptet gor allt fram till dit och stannar, for en tagg som inte lamnat maskinen gar
-    fortfarande att ta bort medan en publicerad version aldrig gar att byta ut. Med -Push
-    gar det hela vagen i ett kommando.
+    The script does everything up to that point and stops, because a tag that has not left
+    the machine can still be deleted, while a published version can never be replaced. With
+    -Push it goes all the way in one command.
 
-    Paketet packas och formkontrolleras INNAN taggen skapas, sa en release som inte gar att
-    bygga aldrig blir en tagg. Misslyckas kontrollen aterstalls arbetskatalogen.
+    The package is packed and shape-checked BEFORE the tag is created, so a release that
+    cannot be built never becomes a tag. If the check fails, the working tree is restored.
 
-    Versionerna barar vid tio i stallet for att rakna vidare: 1.9.0 blir 1.10.0, men 1.10.0
-    blir 2.0.0, eftersom tio ar det sista varde ett segment antar och inte det forsta det
-    vagrar. Patch barar likadant in i minor, som kan bara vidare in i major: 1.10.10 blir
-    2.0.0.
+    Versions carry at ten instead of counting on: 1.9.0 becomes 1.10.0, but 1.10.0
+    becomes 2.0.0, because ten is the last value a segment takes and not the first it
+    refuses. Patch carries into minor the same way, which can carry on into major: 1.10.10
+    becomes 2.0.0.
 
 .PARAMETER Patch
-    Hoj tredje numret. Standard nar ingen bump namns - en release av det har paketet ar
-    oftast en rattning, inte ny yta. Typen sitter i botten av andras anropskedjor, och ny
-    publik yta dar ar sallan det man vill.
+    Bump the third number. The default when no bump is named - a release of this package is
+    usually a fix, not new surface. The type sits at the bottom of other people's call chains,
+    and new public surface there is rarely what you want.
 
 .PARAMETER Minor
-    Hoj andra numret och nollstall det tredje. For nya medlemmar pa Result.
+    Bump the second number and reset the third. For new members on Result.
 
 .PARAMETER Major
-    Hoj forsta numret och nollstall resten. For en andring som bryter befintlig kod.
+    Bump the first number and reset the rest. For a change that breaks existing code.
 
 .PARAMETER Version
-    Satt en uttrycklig version i stallet for att hoja, t.ex. 2.0.0 eller 2.0.0-rc.1.
+    Set an explicit version instead of bumping, e.g. 2.0.0 or 2.0.0-rc.1.
 
 .PARAMETER Push
-    Pusha grenen och taggen nar allt gatt igenom, vilket startar publiceringen.
+    Push the branch and the tag once everything has passed, which starts the publishing.
 
 .PARAMETER DryRun
-    Rapportera vad som skulle handa och andra ingenting.
+    Report what would happen and change nothing.
 
 .PARAMETER Branch
-    Grenen en release far goras fran. Standard main.
+    The branch a release may be made from. Default main.
 
 .EXAMPLE
     ./release.ps1
-    1.0.0 blir 1.0.1, verifierad, commitad och taggad lokalt.
+    1.0.0 becomes 1.0.1, verified, committed and tagged locally.
 
 .EXAMPLE
     ./release.ps1 -Minor -Push
-    Nya medlemmar gick in: 1.0.1 blir 1.1.0, och publiceringen startar.
+    New members went in: 1.0.1 becomes 1.1.0, and publishing starts.
 
 .EXAMPLE
     ./release.ps1 -DryRun
-    Sager vilken version en vanlig korning skulle ge, och andrar ingenting.
+    Tells which version a normal run would produce, and changes nothing.
 #>
 param(
     [switch]$Patch,
@@ -67,8 +67,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Tio ar det sista varde ett versionssegment antar, inte det forsta det vagrar. Andra den
-# har enda siffran for att andra hela systemet.
+# Ten is the last value a version segment takes, not the first it refuses. Change this
+# single number to change the whole scheme.
 $SegmentCeiling = 10
 
 $root    = $PSScriptRoot
@@ -87,7 +87,7 @@ function Step-Version([int]$MajorPart, [int]$MinorPart, [int]$PatchPart, [string
         default { $PatchPart++ }
     }
 
-    # Bars i ordning, sa en patch-bump kan resa hela vagen: 1.10.10 blir 2.0.0.
+    # Carried in order, so a patch bump can travel all the way: 1.10.10 becomes 2.0.0.
     if ($PatchPart -gt $SegmentCeiling) {
         $PatchPart = 0
         $MinorPart++
@@ -102,8 +102,8 @@ function Step-Version([int]$MajorPart, [int]$MinorPart, [int]$PatchPart, [string
 }
 
 function Save-Text([string]$Path, [string]$Text) {
-    # UTF-8 utan BOM, och radsluten som redan star i strangen. .gitattributes lar det har
-    # repot vid CRLF, sa ingenting har far normalisera till LF.
+    # UTF-8 without BOM, and the line endings already in the string. .gitattributes locks this
+    # repo to CRLF, so nothing here may normalize to LF.
     [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($false))
 }
 
@@ -115,7 +115,7 @@ if ($DryRun) {
 
 Write-Host ""
 
-# --- [1/5] Repot maste vara i ett lage som en tagg kan beskriva ---
+# --- [1/5] The repo must be in a state a tag can describe ---
 Write-Host "[1/5] Kontrollerar arbetskatalogen..." -ForegroundColor Yellow
 
 $currentBranch = (git -C $root rev-parse --abbrev-ref HEAD).Trim()
@@ -139,7 +139,7 @@ if ($behind -gt 0) {
 
 Write-Host "      ren, pa $Branch, i fas med origin" -ForegroundColor Green
 
-# --- [2/5] Rakna ut den nya versionen ---
+# --- [2/5] Work out the new version ---
 Write-Host "[2/5] Version" -ForegroundColor Yellow
 
 $csproj = Get-Content $project -Raw
@@ -169,7 +169,7 @@ if ($Version) {
         Fail "Kan inte hoja '$current' - forvantade tre tal."
     }
 
-    # Patch som standard: en release av det har paketet ar oftast en rattning.
+    # Patch by default: a release of this package is usually a fix.
     $part = if ($Major) { "major" } elseif ($Minor) { "minor" } else { "patch" }
     $next = Step-Version ([int]$parts[0]) ([int]$parts[1]) ([int]$parts[2]) $part
 }
@@ -203,7 +203,7 @@ if ($part -ne "explicit" -and $part -ne "major" -and $nextCore.Major -gt $curren
 
 Write-Host "      $current -> $next   (tagg $tag)$carried" -ForegroundColor Green
 
-# --- [3/5] Bevisa att releasen gar att bygga innan den blir en tagg ---
+# --- [3/5] Prove the release builds before it becomes a tag ---
 Write-Host "[3/5] Verifierar paketet..." -ForegroundColor Yellow
 
 if ($DryRun) {
@@ -212,8 +212,8 @@ if ($DryRun) {
     $updatedCsproj = ([regex]'<Version>[^<]*</Version>').Replace($csproj, "<Version>$next</Version>", 1)
     Save-Text $project $updatedCsproj
 
-    # Ingen pipeline-omslutning: publish.ps1 rapporterar via Write-Host, sa utdatan gar rakt
-    # till varden och ingenting skulle komma hit att indentera.
+    # No pipeline wrapping: publish.ps1 reports via Write-Host, so the output goes straight
+    # to the host and nothing would arrive here to indent.
     & $publish -NoBump
     if ($LASTEXITCODE -ne 0) {
         Write-Host "      publish.ps1 misslyckades - aterstaller arbetskatalogen, ingen tagg skapad." -ForegroundColor Red
@@ -224,7 +224,7 @@ if ($DryRun) {
     Write-Host "      tester, pack och formkontroll gick igenom" -ForegroundColor Green
 }
 
-# --- [4/5] Commit och tagg ---
+# --- [4/5] Commit and tag ---
 Write-Host "[4/5] Commit och tagg" -ForegroundColor Yellow
 
 $message = "Release $tag"
@@ -246,7 +246,7 @@ if ($DryRun) {
     Write-Host "      commitad och taggad $tag" -ForegroundColor Green
 }
 
-# --- [5/5] Pushen ar det som publicerar ---
+# --- [5/5] The push is what publishes ---
 Write-Host "[5/5] Push" -ForegroundColor Yellow
 
 if ($DryRun) {
