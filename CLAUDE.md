@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Knowledge-projekt: avig-kalkyl
+Knowledge-projekt: avigkalkyl (inte skapat än — servern bildar slugen; kontrollera med `knowledge project list`)
 Dokumentation, beslut och agentlogg för projektet finns i Knowledge — se ~/.claude/CLAUDE.md.
 
 Vägledning för Claude Code (claude.ai/code) i det här repot.
