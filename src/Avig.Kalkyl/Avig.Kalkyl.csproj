@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Slår på trim- och AOT-analysatorerna. Paketet ska gå att använda i en Native
+         AOT-app, och det är en av skillnaderna mot förebilderna. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 0.x tills alla fem milstolparna är klara. Första publika versionen blir 1.0.0. -->
+    <IsPackable>true</IsPackable>
+    <PackageId>Avig.Kalkyl</PackageId>
+    <Version>0.1.0</Version>
+    <Title>Avig.Kalkyl</Title>
+    <Description>Read and write Excel .xlsx files: streaming rows, cell values as a typed union with a Try pattern, fluent styles that are deduplicated for you, and automatic date detection. Failures come back as Avig.Result values. No dependencies besides Avig.Result; trimming and Native AOT safe.</Description>
+    <PackageTags>excel;xlsx;spreadsheet;openxml;streaming</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avig.Result" Version="1.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Avig.Kalkyl.Tests" />
+  </ItemGroup>
+
+</Project>

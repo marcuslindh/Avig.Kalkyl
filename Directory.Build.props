@@ -1,0 +1,30 @@
+<Project>
+
+  <!-- Delad metadata för biblioteket och testerna. -->
+  <PropertyGroup>
+    <Authors>Marcus Lindh</Authors>
+    <Company>Marcus Lindh</Company>
+    <Copyright>Copyright (c) 2026 Marcus Lindh</Copyright>
+    <NeutralLanguage>sv</NeutralLanguage>
+    <RepositoryUrl>https://github.com/marcuslindh/Avig.Kalkyl</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/marcuslindh/Avig.Kalkyl</PackageProjectUrl>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Byggtidsregler, inget beroende i paketet. publish.ps1 failar om något annat än
+         Avig.Result tar sig in i nuspec:en. -->
+    <PackageReference Include="Avig.Analyzers" Version="1.2.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

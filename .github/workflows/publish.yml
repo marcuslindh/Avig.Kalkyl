@@ -1,0 +1,100 @@
+# Publicerar Avig.Kalkyl till nuget.org nar en v-tagg skjuts upp.
+#
+# Ingen API-nyckel lagras nagonstans. Jobbet ber GitHub om en kortlivad OIDC-token,
+# nuget.org validerar den mot den Trusted Publishing-policy som ar registrerad for det har
+# repot och lamnar tillbaka en tillfallig nyckel som galler en timme. Darfor ligger
+# inloggningssteget sist, precis fore pushen: begard tidigt i ett langt jobb hinner nyckeln
+# ga ut innan den anvands.
+#
+# Policyn pa nuget.org namner den har filen med bara filnamnet - publish.yml, inte
+# .github/workflows/publish.yml. Att byta namn pa filen stoppar publiceringen tills policyn
+# uppdaterats till att matcha.
+name: Publish to NuGet
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+      # Later jobbet skapa den OIDC-token som nuget.org vaxlar in mot en tillfallig nyckel.
+      id-token: write
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          # SourceLink skriver in commiten i nuspec:en och de inbaddade symbolerna pekar
+          # tillbaka pa den, sa bygget behover riktig historik och inte en grund klon.
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Verify the tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $csproj = Get-Content 'src/Avig.Kalkyl/Avig.Kalkyl.csproj' -Raw
+          $version = ([regex]'<Version>([^<]+)</Version>').Match($csproj).Groups[1].Value
+          $tag = $env:TAG -replace '^v', ''
+
+          if ($version -ne $tag) {
+              throw "Tag '$($env:TAG)' resolves to $tag but the csproj says $version. Nothing was published."
+          }
+
+          Write-Host "Tag and package version agree on $version"
+
+      - name: Test, pack and check the package shape
+        shell: pwsh
+        run: ./publish.ps1 -NoBump -Feed "${{ runner.temp }}/feed"
+
+      - name: Locate the package
+        id: package
+        shell: pwsh
+        run: |
+          $package = Get-ChildItem 'src/Avig.Kalkyl/bin/Release/*.nupkg' | Select-Object -First 1
+          if (-not $package) {
+              throw 'publish.ps1 produced no .nupkg.'
+          }
+
+          "path=$($package.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($package.BaseName)" >> $env:GITHUB_OUTPUT
+
+      - name: Keep the package as a build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+
+      - name: Exchange the OIDC token for a temporary NuGet key
+        uses: NuGet/login@v1
+        id: login
+        with:
+          # Profilnamnet pa nuget.org, inte e-postadressen. Halls som en hemlighet pa
+          # NuGet-dokumentationens rekommendation; det ar inte i sig en inloggningsuppgift.
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Push to nuget.org
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          PACKAGE: ${{ steps.package.outputs.path }}
+        run: |
+          dotnet nuget push $env:PACKAGE `
+              --api-key $env:NUGET_API_KEY `
+              --source https://api.nuget.org/v3/index.json

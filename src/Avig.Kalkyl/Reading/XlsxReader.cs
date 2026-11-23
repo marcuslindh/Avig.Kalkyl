@@ -1,0 +1,377 @@
+using System.IO.Compression;
+using System.Xml;
+using Avig.Kalkyl.Internal;
+using Avig.Kalkyl.Reading;
+
+namespace Avig.Kalkyl;
+
+/// <summary>
+/// Reads an .xlsx file. Opening reads the list of sheets, the shared text and the number
+/// formats; the rows are read one at a time with <see cref="SheetReader.ReadRowsAsync"/>, so
+/// memory use stays small however many rows a sheet has.
+/// </summary>
+/// <example>
+/// <code>
+/// Result&lt;XlsxReader&gt; opened = await XlsxReader.OpenAsync("customers.xlsx");
+///
+/// if (opened.IsFailure(out string? error, out _))
+/// {
+///     Console.WriteLine(error);   // not an xlsx, password-protected, not found ...
+///     return;
+/// }
+///
+/// opened.IsSuccess(out XlsxReader? reader);
+/// await using (reader)
+/// {
+///     if (reader.Sheet("Customers").IsSuccess(out SheetReader? sheet))
+///     {
+///         await foreach (Row row in sheet.ReadRowsAsync())
+///         {
+///             if (row.TryGetNumber(2, out double amount)) { ... }
+///         }
+///     }
+/// }
+/// </code>
+/// </example>
+public sealed class XlsxReader : IAsyncDisposable
+{
+    private static readonly byte[] ZipSignature = [0x50, 0x4B, 0x03, 0x04];
+    private static readonly byte[] OleSignature = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+    private readonly Stream stream;
+    private readonly bool leaveOpen;
+    private readonly ZipArchive archive;
+    private readonly List<(SheetInfo Info, string Path)> sheets;
+    private readonly IReadOnlyList<string> sharedStrings;
+    private readonly StyleTable styles;
+
+    private XlsxReader(Stream stream, bool leaveOpen, ZipArchive archive, List<(SheetInfo Info, string Path)> sheets, IReadOnlyList<string> sharedStrings, StyleTable styles, bool uses1904Dates)
+    {
+        this.stream = stream;
+        this.leaveOpen = leaveOpen;
+        this.archive = archive;
+        this.sheets = sheets;
+        this.sharedStrings = sharedStrings;
+        this.styles = styles;
+        Uses1904Dates = uses1904Dates;
+        Sheets = sheets.ConvertAll(sheet => sheet.Info);
+    }
+
+    /// <summary>The worksheets, in tab order. Chart sheets are not listed.</summary>
+    public IReadOnlyList<SheetInfo> Sheets { get; }
+
+    /// <summary>True when the workbook counts dates from 1904, as old Mac files do. Dates are converted either way.</summary>
+    public bool Uses1904Dates { get; }
+
+    /// <summary>Opens a file.</summary>
+    /// <param name="path">The file.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>
+    /// The reader; NotFound when the file does not exist, Forbidden when it may not be read,
+    /// Conflict when another program holds it locked, and Invalid when it is not an .xlsx
+    /// workbook (including old .xls files and password-protected workbooks).
+    /// </returns>
+    public static async Task<Result<XlsxReader>> OpenAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        FileStream file;
+
+        try
+        {
+            file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65_536, FileOptions.Asynchronous);
+        }
+        catch (FileNotFoundException)
+        {
+            return Result<XlsxReader>.NotFound($"'{path}' does not exist.");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return Result<XlsxReader>.NotFound($"The folder for '{path}' does not exist.");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Result<XlsxReader>.Forbidden($"'{path}' may not be read.");
+        }
+        catch (IOException exception)
+        {
+            return Result<XlsxReader>.Conflict($"'{path}' could not be opened: {exception.Message}");
+        }
+
+        Result<XlsxReader> opened = await OpenAsync(file, false, cancellationToken);
+
+        if (opened.IsFailure(out _, out _) == true)
+        {
+            await file.DisposeAsync();
+        }
+
+        return opened;
+    }
+
+    /// <summary>
+    /// Reads from a stream. A stream that cannot seek is copied to memory first, because the
+    /// zip directory sits at the end of the file.
+    /// </summary>
+    /// <param name="input">The stream.</param>
+    /// <param name="leaveOpen">Leave the stream open when the reader is disposed.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The reader, or Invalid when the content is not an .xlsx workbook.</returns>
+    public static async Task<Result<XlsxReader>> OpenAsync(Stream input, bool leaveOpen = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        Stream source = input;
+        bool ownsSource = false;
+
+        if (input.CanSeek == false)
+        {
+            MemoryStream copy = new();
+            await input.CopyToAsync(copy, cancellationToken);
+            copy.Position = 0;
+            source = copy;
+            ownsSource = true;
+        }
+
+        Result<XlsxReader> opened = await OpenSeekableAsync(source, ownsSource || leaveOpen == false, cancellationToken);
+
+        if (ownsSource == true && leaveOpen == false)
+        {
+            await input.DisposeAsync();
+        }
+
+        if (opened.IsFailure(out _, out _) == true && ownsSource == true)
+        {
+            await source.DisposeAsync();
+        }
+
+        return opened;
+    }
+
+    /// <summary>Gets a worksheet by name. Excel compares sheet names without regard to case, and so does this.</summary>
+    /// <param name="name">The name on the tab.</param>
+    /// <returns>The sheet, or NotFound.</returns>
+    public Result<SheetReader> Sheet(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        int index = sheets.FindIndex(sheet => string.Equals(sheet.Info.Name, name, StringComparison.OrdinalIgnoreCase) == true);
+
+        if (index < 0)
+        {
+            string names = string.Join(", ", sheets.Select(sheet => "'" + sheet.Info.Name + "'"));
+
+            return Result<SheetReader>.NotFound($"There is no sheet named '{name}'. The workbook has {names}.");
+        }
+
+        return Sheet(index);
+    }
+
+    /// <summary>Gets a worksheet by position.</summary>
+    /// <param name="index">The position, 0-based, among the worksheets.</param>
+    /// <returns>The sheet, NotFound when there are fewer sheets, or Invalid when the file lacks the sheet's part.</returns>
+    public Result<SheetReader> Sheet(int index)
+    {
+        if (index < 0 || index >= sheets.Count)
+        {
+            return Result<SheetReader>.NotFound($"There is no sheet {index}. The workbook has {sheets.Count} worksheet(s), numbered from 0.");
+        }
+
+        (SheetInfo info, string path) = sheets[index];
+
+        if (XmlParts.TryFindEntry(archive, path, out ZipArchiveEntry? entry) == false)
+        {
+            return Result<SheetReader>.Invalid($"The file is damaged: the sheet '{info.Name}' points to '{path}', which is not in the file.");
+        }
+
+        return new SheetReader(info, entry, sharedStrings, styles, Uses1904Dates);
+    }
+
+    /// <summary>Closes the file.</summary>
+    /// <returns>A task that completes when the file is closed.</returns>
+    public async ValueTask DisposeAsync()
+    {
+        await archive.DisposeAsync();
+
+        if (leaveOpen == false)
+        {
+            await stream.DisposeAsync();
+        }
+    }
+
+    private static async Task<Result<XlsxReader>> OpenSeekableAsync(Stream source, bool disposeSource, CancellationToken cancellationToken)
+    {
+        Result signature = await CheckSignatureAsync(source, cancellationToken);
+
+        if (signature.IsFailure(out string? signatureError, out ResultStatus signatureStatus) == true)
+        {
+            return Result<XlsxReader>.Failure(signatureError, signatureStatus);
+        }
+
+        ZipArchive archive;
+
+        try
+        {
+            archive = await ZipArchive.CreateAsync(source, ZipArchiveMode.Read, true, null, cancellationToken);
+        }
+        catch (InvalidDataException exception)
+        {
+            return Result<XlsxReader>.Invalid($"The file is not a valid .xlsx workbook: the zip container is damaged ({exception.Message}).");
+        }
+
+        try
+        {
+            Result<XlsxReader> loaded = await LoadAsync(source, disposeSource == false, archive, cancellationToken);
+
+            if (loaded.IsFailure(out _, out _) == true)
+            {
+                await archive.DisposeAsync();
+            }
+
+            return loaded;
+        }
+        catch (XmlException exception)
+        {
+            await archive.DisposeAsync();
+
+            return Result<XlsxReader>.Invalid($"The file is not a valid .xlsx workbook: a part has broken XML ({exception.Message}).");
+        }
+        catch (InvalidDataException exception)
+        {
+            await archive.DisposeAsync();
+
+            return Result<XlsxReader>.Invalid($"The file is not a valid .xlsx workbook: {exception.Message}");
+        }
+    }
+
+    private static async Task<Result> CheckSignatureAsync(Stream source, CancellationToken cancellationToken)
+    {
+        byte[] header = new byte[8];
+        long start = source.Position;
+        int read = await source.ReadAtLeastAsync(header, header.Length, false, cancellationToken);
+        source.Position = start;
+
+        if (read >= 8 && header.AsSpan().SequenceEqual(OleSignature) == true)
+        {
+            return Result.Invalid("The file is not an .xlsx workbook. It is either an old .xls workbook or a password-protected .xlsx; neither can be read. Save it as an unprotected .xlsx in Excel.");
+        }
+
+        if (read < 4 || header.AsSpan(0, 4).SequenceEqual(ZipSignature) == false)
+        {
+            return Result.Invalid("The file is not an .xlsx workbook.");
+        }
+
+        return Result.Success();
+    }
+
+    private static async Task<Result<XlsxReader>> LoadAsync(Stream source, bool leaveOpen, ZipArchive archive, CancellationToken cancellationToken)
+    {
+        Dictionary<string, (string Type, string Target)> rootRelationships = await XmlParts.ReadRelationshipsAsync(archive, "_rels/.rels", cancellationToken);
+        string workbookPath = "xl/workbook.xml";
+
+        foreach ((string type, string target) in rootRelationships.Values)
+        {
+            if (Ooxml.IsRelationship(type, "officeDocument") == true)
+            {
+                workbookPath = Ooxml.ResolveTarget(string.Empty, target);
+            }
+        }
+
+        if (XmlParts.TryFindEntry(archive, workbookPath, out ZipArchiveEntry? workbookEntry) == false)
+        {
+            return Result<XlsxReader>.Invalid("The file is not an .xlsx workbook: it has no workbook part. It may be a Word or PowerPoint file.");
+        }
+
+        Dictionary<string, (string Type, string Target)> workbookRelationships = await XmlParts.ReadRelationshipsAsync(archive, Ooxml.RelationshipsPath(workbookPath), cancellationToken);
+        (List<(string Name, string RelationshipId, SheetVisibility Visibility)> declared, bool uses1904) = await ReadWorkbookAsync(workbookEntry, cancellationToken);
+        List<(SheetInfo Info, string Path)> sheets = [];
+
+        foreach ((string name, string relationshipId, SheetVisibility visibility) in declared)
+        {
+            if (workbookRelationships.TryGetValue(relationshipId, out (string Type, string Target) relationship) == false)
+            {
+                continue;
+            }
+
+            if (Ooxml.IsRelationship(relationship.Type, "worksheet") == false)
+            {
+                continue;
+            }
+
+            sheets.Add((new SheetInfo(name, sheets.Count, visibility), Ooxml.ResolveTarget(workbookPath, relationship.Target)));
+        }
+
+        IReadOnlyList<string> sharedStrings = [];
+        StyleTable styles = StyleTable.Empty;
+
+        foreach ((string type, string target) in workbookRelationships.Values)
+        {
+            string path = Ooxml.ResolveTarget(workbookPath, target);
+
+            if (Ooxml.IsRelationship(type, "sharedStrings") == true && XmlParts.TryFindEntry(archive, path, out ZipArchiveEntry? stringsEntry) == true)
+            {
+                sharedStrings = await ReadSharedStringsAsync(stringsEntry, cancellationToken);
+            }
+            else if (Ooxml.IsRelationship(type, "styles") == true && XmlParts.TryFindEntry(archive, path, out ZipArchiveEntry? stylesEntry) == true)
+            {
+                styles = await StyleTable.ReadAsync(stylesEntry, cancellationToken);
+            }
+        }
+
+        return new XlsxReader(source, leaveOpen, archive, sheets, sharedStrings, styles, uses1904);
+    }
+
+    private static async Task<(List<(string Name, string RelationshipId, SheetVisibility Visibility)> Sheets, bool Uses1904)> ReadWorkbookAsync(ZipArchiveEntry entry, CancellationToken cancellationToken)
+    {
+        List<(string, string, SheetVisibility)> sheets = [];
+        bool uses1904 = false;
+        await using Stream stream = await entry.OpenAsync(cancellationToken);
+        using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+
+        while (await reader.ReadAsync() == true)
+        {
+            if (XmlParts.IsElement(reader, "workbookPr") == true)
+            {
+                string? date1904 = reader.GetAttribute("date1904");
+                uses1904 = date1904 is "1" or "true";
+
+                continue;
+            }
+
+            if (XmlParts.IsElement(reader, "sheet") == true)
+            {
+                string? name = reader.GetAttribute("name");
+
+                if (name is null || XmlParts.TryGetRelationshipId(reader, out string? relationshipId) == false)
+                {
+                    continue;
+                }
+
+                SheetVisibility visibility = reader.GetAttribute("state") switch
+                {
+                    "hidden" => SheetVisibility.Hidden,
+                    "veryHidden" => SheetVisibility.VeryHidden,
+                    _ => SheetVisibility.Visible,
+                };
+
+                sheets.Add((name, relationshipId, visibility));
+            }
+        }
+
+        return (sheets, uses1904);
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadSharedStringsAsync(ZipArchiveEntry entry, CancellationToken cancellationToken)
+    {
+        List<string> strings = [];
+        await using Stream stream = await entry.OpenAsync(cancellationToken);
+        using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+
+        while (await reader.ReadAsync() == true)
+        {
+            if (XmlParts.IsElement(reader, "si") == true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                strings.Add(await XmlParts.ReadRichTextAsync(reader));
+            }
+        }
+
+        return strings;
+    }
+}
