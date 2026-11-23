@@ -151,6 +151,13 @@ if ($SkipVerify) {
         exit 1
     }
 
+    # Kallgeneratorn for [KalkylRow] maste folja med, annars kompilerar ingen typad mappning
+    # hos den som anvander paketet.
+    if (-not ($entries | Where-Object { $_ -eq "analyzers/dotnet/cs/Avig.Kalkyl.Generators.dll" })) {
+        Write-Host "      FEL: analyzers/dotnet/cs/Avig.Kalkyl.Generators.dll saknas i paketet" -ForegroundColor Red
+        exit 1
+    }
+
     # Avig.Result ar det enda tillatna beroendet. Allt annat - en zip-, XML- eller
     # bildbibliotek - ar precis det som gor NPOI och ClosedXML tunga att dra in.
     $deps = @($nuspec.package.metadata.dependencies.group.dependency) | Where-Object { $_ -ne $null }

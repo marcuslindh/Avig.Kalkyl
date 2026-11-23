@@ -15,6 +15,7 @@
     <!-- Bara i testerna: Microsofts schemavalidator kontrollerar att filerna vi skriver är
          giltig OOXML. Biblioteket självt beror inte på det. -->
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -25,6 +26,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Avig.Kalkyl\Avig.Kalkyl.csproj" />
+    <!-- Både som generator (för [KalkylRow]-typerna i testerna) och som vanlig referens
+         (för testerna som kör generatorn på kod som ska ge diagnostik). -->
+    <ProjectReference Include="..\..\src\Avig.Kalkyl.Generators\Avig.Kalkyl.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
   </ItemGroup>
 
 </Project>

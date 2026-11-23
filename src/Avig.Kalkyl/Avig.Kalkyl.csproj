@@ -43,4 +43,11 @@
     <InternalsVisibleTo Include="Avig.Kalkyl.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Källgeneratorn byggs före paketet men refereras inte av det: den följer med under
+         analyzers/dotnet/cs, där kompilatorn hos den som använder paketet hittar den. -->
+    <ProjectReference Include="..\Avig.Kalkyl.Generators\Avig.Kalkyl.Generators.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="..\Avig.Kalkyl.Generators\bin\$(Configuration)\netstandard2.0\Avig.Kalkyl.Generators.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+  </ItemGroup>
+
 </Project>

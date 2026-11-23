@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Avig.Kalkyl/Avig.Kalkyl.csproj" />
+    <Project Path="src/Avig.Kalkyl.Generators/Avig.Kalkyl.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Avig.Kalkyl.Tests/Avig.Kalkyl.Tests.csproj" />
