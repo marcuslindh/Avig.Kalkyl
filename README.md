@@ -1,77 +1,141 @@
 # Avig.Kalkyl
 
-Read and write Excel `.xlsx` files. Rows stream in and out one at a time, cell values are a
-typed union with a Try pattern, styles are set per cell and deduplicated for you, and dates are
-recognised from their number format. Expected failures come back as
-[Avig.Result](https://www.nuget.org/packages/Avig.Result) values instead of exceptions.
+Read, write, edit and calculate Excel `.xlsx` files in .NET. Three ways in, one package:
 
-No dependencies besides Avig.Result. Safe for trimming and Native AOT.
+- **Streaming** — `XlsxReader` and `XlsxWriter` read and write a row at a time with flat memory use.
+- **Typed** — `[KalkylRow]` classes are written and read as lists; a source generator writes the
+  mapping, so there is no reflection.
+- **Document** — `Workbook` opens a file, lets you change any cell, recalculates formulas with a
+  built-in engine of 300+ functions, and saves it with everything it does not understand (charts,
+  pictures, conditional formatting, comments, macros) left as it was.
 
-> **Status: in development (0.x).** Streaming read and write are done. Typed mapping, the
-> document model and the formula engine are on their way to 1.0.
+Expected failures come back as [Avig.Result](https://www.nuget.org/packages/Avig.Result) values
+instead of exceptions. No dependencies besides Avig.Result. Safe for trimming and Native AOT.
 
-## Writing
+```
+dotnet add package Avig.Kalkyl
+```
+
+## Typed lists
 
 ```csharp
 using Avig;
 using Avig.Kalkyl;
 
-Result<XlsxWriter> created = await XlsxWriter.CreateAsync("customers.xlsx");
-
-if (created.IsFailure(out string? error, out _))
+[KalkylRow]
+public partial class Customer
 {
-    Console.WriteLine(error);   // folder missing, file open in Excel ...
-    return;
+    [KalkylColumn("Name", Width = 30)]
+    public required string Name { get; init; }
+
+    [KalkylColumn(NumberFormat = "# ##0.00")]
+    public decimal Balance { get; init; }
+
+    public DateOnly? Since { get; init; }
+
+    public CustomerLevel Level { get; init; }
+
+    [KalkylIgnore]
+    public string Notes { get; set; } = "";
 }
 
-created.IsSuccess(out XlsxWriter? writer);
+Result written = await Xlsx.WriteAsync("customers.xlsx", customers, "Customers");
 
-await using (writer)
+await foreach (Result<Customer> row in Xlsx.ReadAsync<Customer>("customers.xlsx"))
 {
-    Result<SheetWriter> added = await writer.AddSheetAsync("Customers");
-    added.IsSuccess(out SheetWriter? sheet);
-
-    sheet.SetColumnWidth(0, 30);
-    sheet.FreezePanes(1);
-    sheet.EnableAutoFilter();
-
-    await sheet.WriteRowAsync([Cell.Of("Name").Bold(), Cell.Of("Since").Bold(), Cell.Of("Balance").Bold()]);
-
-    foreach (Customer customer in customers)
+    if (row.IsFailure(out string? error, out _))
     {
-        await sheet.WriteRowAsync([customer.Name, customer.Since, Cell.Of(customer.Balance).NumberFormat("# ##0.00")]);
+        Console.WriteLine(error);   // Cell C7 (row 6, column 2) in 'Customers', column 'Balance', holds 'abc', which is not a number.
+        continue;
     }
 
-    await sheet.WriteRowAsync([Cell.Of("Total").Bold(), Cell.Empty, Cell.FromFormula("SUM(C2:C100)")]);
+    row.IsSuccess(out Customer? customer);
 }
 ```
 
-Any value converts to a `Cell` implicitly, so a row is just a collection expression. Rows go
-from the top down; column widths and frozen panes have to be set before the first row, because
-that is where they sit in the file.
+The type must be `partial` with a public parameterless constructor. Supported property types:
+`string`, `int`, `long`, `short`, `byte`, `double`, `float`, `decimal`, `bool`, `DateTime`,
+`DateOnly`, `TimeOnly`, `Guid`, enums (by name), `CellValue`, and their nullable forms. A
+non-nullable property is a required column; a missing required column gives one Invalid result
+and nothing more, a bad cell gives an Invalid result for that row and reading goes on. Headers are
+matched without regard to order, case or surrounding spaces. Numbers, dates and booleans stored
+as text (`"1,5"`, `"2026-01-02"`, `"ja"`) are understood.
 
-## Reading
+The generator reports what it cannot map at compile time: KALK001 (type not partial), KALK002
+(property type not supported), KALK003 (no public parameterless constructor), KALK004 (nested or
+generic type).
+
+## Editing a workbook
 
 ```csharp
-Result<XlsxReader> opened = await XlsxReader.OpenAsync("customers.xlsx");
+Result<Workbook> opened = await Workbook.OpenAsync("budget.xlsx");
 
-if (opened.IsFailure(out string? error, out ResultStatus status))
+if (opened.IsSuccess(out Workbook? book) && book.Sheet("2026").IsSuccess(out Worksheet? sheet))
 {
-    Console.WriteLine(error);   // not found, an old .xls, password-protected ...
-    return;
+    sheet.SetValue(4, 2, 125_000);                    // C5 — keeps the cell's formatting
+    sheet["D5"] = Cell.FromFormula("C5*1.25").Bold();  // replaces value, formula and style
+    sheet.SetColumnWidth(3, 18);
+
+    RecalculationReport report = await book.RecalculateAsync();
+    Result saved = await book.SaveAsync("budget.xlsx");
+}
+```
+
+When a file is saved, every part the model does not own is copied byte for byte, worksheets are
+copied element by element with only the cell data rewritten, and a cell that was not changed is
+written from its original XML. Styles that were in the file keep their index, so borders and theme
+colours survive even though `Style` does not describe them. The calculation chain is dropped and
+Excel is told to recalculate on open.
+
+## Formulas
+
+`RecalculateAsync()` calculates the formulas affected by cells set since the last recalculation,
+everything that depends on them, and volatile functions (NOW, TODAY, RAND, INDIRECT, OFFSET).
+`RecalculateAsync(RecalculationScope.All)` calculates every formula. The engine builds a
+dependency graph and calculates in dependency order; circular references get 0, as in Excel
+without iterative calculation, and are listed in the report together with unknown functions
+(which give `#NAME?`) and formulas that cannot be parsed.
+
+```csharp
+Result<CellValue> total = book.Evaluate("SUM(Budget!B2:B13)*(1+Moms)");
+```
+
+The engine follows Excel's conversions, comparison rules, error propagation, implicit
+intersection, array arithmetic (`SUMPRODUCT((A1:A9>0)*B1:B9)`), defined names, shared formulas
+and the 1900 and 1904 date systems. Not supported: dynamic-array spilling (an array result shows
+its first value), structured table references (`Table1[Column]` gives `#REF!`), R1C1 references
+in INDIRECT, and external workbooks.
+
+## Streaming
+
+```csharp
+Result<XlsxWriter> created = await XlsxWriter.CreateAsync("report.xlsx");
+
+if (created.IsSuccess(out XlsxWriter? writer))
+{
+    await using (writer)
+    {
+        Result<SheetWriter> added = await writer.AddSheetAsync("Report");
+        added.IsSuccess(out SheetWriter? sheet);
+        sheet.FreezePanes(1);
+        sheet.EnableAutoFilter();
+
+        await sheet.WriteRowAsync([Cell.Of("Name").Bold(), Cell.Of("Since").Bold()]);
+        await sheet.WriteRowAsync(["Ada", new DateTime(2026, 1, 2)]);
+    }
 }
 
-opened.IsSuccess(out XlsxReader? reader);
+Result<XlsxReader> opened = await XlsxReader.OpenAsync("report.xlsx");
 
-await using (reader)
+if (opened.IsSuccess(out XlsxReader? reader))
 {
-    if (reader.Sheet("Customers").IsSuccess(out SheetReader? sheet))
+    await using (reader)
     {
-        await foreach (Row row in sheet.ReadRowsAsync())
+        if (reader.Sheet("Report").IsSuccess(out SheetReader? sheet))
         {
-            if (row.TryGetText(0, out string? name) && row.TryGetDate(1, out DateTime since))
+            await foreach (Row row in sheet.ReadRowsAsync())
             {
-                Console.WriteLine($"{name} since {since:d}");
+                if (row.TryGetText(0, out string? name) && row.TryGetDate(1, out DateTime since)) { }
             }
         }
     }
@@ -80,47 +144,31 @@ await using (reader)
 
 ## Addresses are 0-based
 
-`row[0]` is column A and `new CellAddress(1, 2)` is the cell Excel calls **C2**. `CellAddress`
-converts both ways: `CellAddress.Parse("C2")` and `address.ToString()`.
+`row[0]` is column A and `sheet[1, 2]` is the cell Excel calls **C2**. `sheet["C2"]` and
+`CellAddress.Parse("C2")` take Excel's notation. Error messages give both: "cell C2 (row 1, column 2)".
 
-## Values
+## Values and styles
 
-`CellValue` holds one of `Text`, `Number`, `Bool`, `Date`, `Error` or nothing (`Empty`):
+`CellValue` holds `Text`, `Number`, `Bool`, `Date`, `Error` or nothing; read it with
+`TryGetText`, `TryGetNumber`, `TryGetBool`, `TryGetDate`, `TryGetError`, or switch on `Kind`.
+Excel stores dates as numbers with a date format; the reader turns them back into `DateTime`,
+including the made-up 29 February 1900 and workbooks that count from 1904.
 
-```csharp
-switch (cell.Value.Kind)
-{
-    case CellKind.Number: ...
-    case CellKind.Date: ...
-}
-
-if (cell.TryGetNumber(out double amount)) { ... }
-```
-
-`TryGetNumber` does not return a date's serial number: a date is a date. Excel stores dates as
-numbers with a date format, and the reader turns them back into `DateTime`, including Excel's
-made-up 29 February 1900 and workbooks that count from 1904. A time without a date comes back
-on 1899-12-31, Excel's day zero.
-
-## Styles
-
-```csharp
-Cell.Of("Total").Bold().Italic().FontColor("#C00000").Background("#FFF2CC").Align(HorizontalAlignment.Right)
-```
-
-`Style` is an immutable record compared by value. Two cells with equal styles share one entry in
-the file, so styling every cell on its own never hits Excel's limit of about 64 000 styles.
-When reading, only the number format is filled in for now.
+`Style` is an immutable record set with chained methods —
+`Cell.Of("Total").Bold().FontColor("#C00000").Background("#FFF2CC").NumberFormat("0.00")` — and
+compared by value: equal styles share one entry in the file, so styling every cell on its own never
+hits Excel's limit of about 64 000 styles. When reading, font, fill, number format and alignment
+are filled in.
 
 ## What goes wrong, and how you hear about it
 
 | Situation | You get |
 | --- | --- |
-| File or folder missing | `NotFound` |
+| File or folder missing, sheet not found | `NotFound` |
 | No permission | `Forbidden` |
 | File locked by another program, sheet name taken | `Conflict` |
-| Not an .xlsx, an old .xls, password-protected, damaged container, bad sheet name | `Invalid` |
-| A sheet damaged half-way through | `InvalidDataException` when the damaged row is reached |
+| Not an .xlsx, an old .xls, password-protected, damaged, bad sheet name, bad cell when mapping | `Invalid` |
+| A sheet damaged half-way through a stream | `InvalidDataException` when the damaged row is reached |
 | Calling something in the wrong order, values Excel cannot store | `InvalidOperationException`, `ArgumentException` |
 
 ## Building

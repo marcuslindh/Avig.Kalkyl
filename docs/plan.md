@@ -4,43 +4,38 @@ Alla fem milstolparna ska vara klara innan 1.0.0 släpps (beslut 2026-11-23, se 
 
 | # | Milstolpe | Status |
 | --- | --- | --- |
-| 1 | Strömmande läsare och skrivare, stilar, datum | **Klar 2026-11-23** |
-| 2 | Typad mappning med källgenerator (`Read<T>`, `Write(list)`, `Result` per rad) | Inte påbörjad |
-| 3 | Dokumentmodell: öppna, ändra, spara, och bevara det paketet inte förstår | Inte påbörjad |
-| 4 | Formelmotorns grund: parser, beroendegraf, omräkning, cirkelreferenser, delade formler | Inte påbörjad |
-| 5 | Funktionsbiblioteket, 200+ funktioner, i omgångar om cirka 50 | Inte påbörjad |
+| 1 | Strömmande läsare och skrivare, stilar, datum | Klar 2026-11-23 |
+| 2 | Typad mappning med källgenerator (`Read<T>`, `Write(list)`, `Result` per rad) | Klar 2026-11-23 |
+| 3 | Dokumentmodell: öppna, ändra, spara, och bevara det paketet inte förstår | Klar 2026-11-23 |
+| 4 | Formelmotorns grund: parser, beroendegraf, omräkning, cirkelreferenser, delade formler | Klar 2026-11-23 |
+| 5 | Funktionsbiblioteket, 300+ funktioner | Pågår |
 
-## Milstolpe 1 — vad som finns
+## Arkitektur i korthet
 
-**Skriva** (`XlsxWriter`, `SheetWriter`): flera blad, text (inline), tal, booleska värden,
-datum, felvärden, formler med eller utan sparat resultat, stilar per cell (fetstil, kursiv,
-understrykning, färg, storlek, typsnitt, fyllning, talformat, justering, radbrytning) med
-automatisk sammanslagning, kolumnbredd, frysta rutor, autofilter, kontroll av bladnamn.
-Tomma arbetsböcker får ett tomt blad.
+- `Internal/` — datum, talformat, textkodning, sökvägar i paketet, och `CellXml`/`SheetXml` som
+  skriver och tolkar celler och bladens omgivande element. Gemensamt för alla tre lägena.
+- `Reading/`, `Writing/` — strömläget. `StyleTable` läser styles.xml, `StyleRegistry` skriver den
+  (ny fil, eller tillägg till en öppnad fils stilar).
+- `Mapping/` — körtidsdelen av den typade mappningen. Generatorn ligger i `Avig.Kalkyl.Generators`
+  (netstandard2.0) och packas under `analyzers/dotnet/cs`.
+- `Document/` — `Workbook`, `Worksheet`, `DocumentLoader` (behåller varje cells ursprungliga XML)
+  och `DocumentSaver` (kopierar allt den inte äger, skriver om `sheetData`).
+- `Formulas/` — lexer, parser, `Evaluator`, `FunctionCall`, `Recalculator` och en klass per
+  funktionskategori under `Functions/`.
 
-**Läsa** (`XlsxReader`, `SheetReader`, `Row`): delade strängar (även formaterad text och
-fonetisk text som hoppas över), inline-strängar, `t="str"`, `t="d"`, booleska värden, fel, tal,
-datum via inbyggda och egna talformat, 1900- och 1904-systemet, formeltext och cachat värde,
-glesa rader och celler utan adress, dolda blad, Strict OOXML, absoluta och relativa sökvägar
-i relationer, strömmar som inte kan söka.
+## Medvetna begränsningar
 
-**Kontrollerat:** 108 tester, bland annat att en fil med alla funktioner klarar Microsofts
-schemavalidator (DocumentFormat.OpenXml). Inte öppnat i Excel: varken Excel eller LibreOffice
-fanns på maskinen där milstolpen byggdes.
+- Inget dynamiskt "spill": ett matrisresultat visar sitt första värde.
+- Strukturerade tabellreferenser (`Tabell[Kolumn]`) ger `#REF!`; R1C1 i INDIRECT stöds inte;
+  externa arbetsböcker stöds inte.
+- Blad kan läggas till men inte tas bort eller döpas om i dokumentmodellen (formler och
+  definierade namn som pekar på bladet skulle behöva skrivas om).
+- Ändrar man rubrikcellerna i en Excel-tabell blir tabelldefinitionen inaktuell.
+- Skrivaren använder inline-strängar; Excel gör om dem till delade strängar när filen sparas.
 
-**Medvetna begränsningar i milstolpe 1:**
+## Att göra före 1.0
 
-- När filen läses fylls bara talformatet i `Cell.Style`. Övrig formatering kommer med
-  dokumentmodellen.
-- Följande celler i en delad formel får `Formula = null` (värdet läses). Formeltexten räknas
-  fram i milstolpe 4.
-- Skrivaren använder inline-strängar och inte delade strängar. Det håller minnet konstant men
-  ger något större filer när samma text upprepas. Excel gör om dem till delade strängar när
-  filen sparas.
-- Diagrambladen listas inte i `XlsxReader.Sheets`.
-
-## Att göra före nästa milstolpe
-
-- Öppna en fil från skrivaren i riktiga Excel och se att den öppnas utan reparation.
-- Prova läsaren på några riktiga filer från Excel, LibreOffice och Google Sheets.
-- Skapa GitHub-repot och Trusted Publishing-policyn på nuget.org när 1.0 närmar sig.
+- Öppna filer från skrivaren och dokumentmodellen i riktiga Excel och se att de öppnas utan reparation.
+- Prova läsaren och dokumentmodellen på riktiga filer från Excel, LibreOffice och Google Sheets.
+- Jämför formelmotorn med Excel på en större uppsättning riktiga arbetsböcker.
+- Skapa GitHub-repot och Trusted Publishing-policyn på nuget.org.
