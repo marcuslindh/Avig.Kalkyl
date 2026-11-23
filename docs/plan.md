@@ -8,7 +8,7 @@ Alla fem milstolparna ska vara klara innan 1.0.0 släpps (beslut 2026-11-23, se 
 | 2 | Typad mappning med källgenerator (`Read<T>`, `Write(list)`, `Result` per rad) | Klar 2026-11-23 |
 | 3 | Dokumentmodell: öppna, ändra, spara, och bevara det paketet inte förstår | Klar 2026-11-23 |
 | 4 | Formelmotorns grund: parser, beroendegraf, omräkning, cirkelreferenser, delade formler | Klar 2026-11-23 |
-| 5 | Funktionsbiblioteket, 300+ funktioner | Pågår |
+| 5 | Funktionsbiblioteket: 333 funktioner i nio kategorier | Klar 2026-11-23 |
 
 ## Arkitektur i korthet
 
@@ -22,6 +22,16 @@ Alla fem milstolparna ska vara klara innan 1.0.0 släpps (beslut 2026-11-23, se 
   och `DocumentSaver` (kopierar allt den inte äger, skriver om `sheetData`).
 - `Formulas/` — lexer, parser, `Evaluator`, `FunctionCall`, `Recalculator` och en klass per
   funktionskategori under `Functions/`.
+
+## Funktionsbiblioteket
+
+333 funktioner: matematik och trigonometri (79), statistik och fördelningar (106), text (31), information (16), logik (11), datum och tid (25), uppslag och referens (19), finans (27) och teknik (23). Byggt av fem parallella agenter i var sin worktree, en per kategorigrupp, och sammanslaget utan konflikter. 1 490 tester. Kända avvikelser som agenterna själva redovisade:
+
+- AREAS ger alltid 1 och INDEX tar bara område 1, eftersom motorn saknar referenser med flera områden.
+- SUBTOTAL 101–111 beter sig som 1–11, eftersom dolda rader inte följs. AGGREGATE 15–19 ger #VALUE!.
+- TEXT stöder inte bråkformat (# ?/?) eller villkorsavsnitt ([>100]).
+- DOLLAR visar negativa belopp inom parentes, som i Microsofts exempel.
+- LARGE/SMALL avrundar ett k med decimaler uppåt (som LibreOffice); det är inte kontrollerat mot Excel.
 
 ## Medvetna begränsningar
 
