@@ -112,7 +112,7 @@ public class FormulaEngineTests
 
         Assert.Equal(6, Formula.Number("=SUM(A1:A3)", cells));
         Assert.Equal(6, Formula.Number("=SUM(A:A)", cells));
-        Assert.Equal(16, Formula.Number("=SUM(A1:C1, A2)", cells), 12);
+        Assert.Equal(13, Formula.Number("=SUM(A1:C1, A2)", cells));
         Assert.Equal(12, Formula.Number("=SUM(A1:A3*2)", cells));
         Assert.Equal(14, Formula.Number("=SUM(A1:A3*{1;2;3})", cells));
         Assert.Equal(6, Formula.Number("=SUM(A1:A2:A3)", cells));
