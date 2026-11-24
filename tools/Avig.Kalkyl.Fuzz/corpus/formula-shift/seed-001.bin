@@ -1,0 +1,1 @@
+=SERIESSUM('Data'!A1:A3,)

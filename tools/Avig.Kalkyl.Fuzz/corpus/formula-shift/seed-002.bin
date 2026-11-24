@@ -1,0 +1,1 @@
+þ=-Rate%>=STEYX(ACOTH("x""y",TRUE," 1,5 ",4.9E-324),IF('Data'!A1:A3,,B:D,#NULL!))>=A1:D8

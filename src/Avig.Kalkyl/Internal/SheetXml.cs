@@ -29,6 +29,12 @@ internal static class SheetXml
         "legacyDrawing", "legacyDrawingHF", "drawingHF", "picture", "oleObjects", "controls", "webPublishItems", "tableParts", "extLst",
     ];
 
+    /// <summary>True when the schema names the element, so that its position says where others go.</summary>
+    public static bool IsKnown(string localName)
+    {
+        return Array.IndexOf(WorksheetOrder, localName) >= 0;
+    }
+
     public static int OrderOf(string localName)
     {
         int index = Array.IndexOf(WorksheetOrder, localName);

@@ -11,6 +11,7 @@ internal static class NumberFormats
 
     public const string DateFormat = "yyyy-mm-dd";
     public const string DateTimeFormat = "yyyy-mm-dd hh:mm:ss";
+    public const string TimeFormat = "hh:mm:ss";
 
     private static readonly Dictionary<int, string> BuiltIn = new()
     {

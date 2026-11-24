@@ -8,3 +8,6 @@
 *.jpg binary
 *.snk binary
 *.nupkg binary
+
+# Fuzz inputs are bytes, not text: a line-ending conversion would change the seeds
+tools/Avig.Kalkyl.Fuzz/corpus/** binary

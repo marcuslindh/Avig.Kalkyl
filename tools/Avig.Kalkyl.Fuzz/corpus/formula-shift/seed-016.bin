@@ -1,0 +1,1 @@
+ú(TEXTJOIN(++2:8,STDEVP(_xlfn.X)>=Data!A1))

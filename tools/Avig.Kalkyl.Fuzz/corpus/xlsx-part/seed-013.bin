@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData>
+<row r="1"><c r="A1"><f>SUM(Data!B:B)</f><v>1E+300</v></c><c r="B1"><f>Local*2</f></c><c r="C1"><f>B1</f></c></ro t="x"w>
+<row r="3"><c r="C3"><f>C3+1</f><v>0</v></c><c r="XFD3"><v>1</v></c></row>
+<row r="1048576"><c r="A1048576" t="inlineStr"><is><t>last</t></is></c></row>
+</sheetData>
+</worksheet>
