@@ -442,12 +442,13 @@ internal static class TextFunctions
         }
 
         // Divided rather than multiplied: text.Length * count overflows for a count near long.MaxValue.
-        if (count < 0 || (text.Length > 0 && count > MaxLength / text.Length))
+        // Excel refuses a count past int.MaxValue even for empty text.
+        if (count < 0 || count > int.MaxValue || (text.Length > 0 && count > MaxLength / text.Length))
         {
             return Value.ValueError;
         }
 
-        // Empty text repeated any number of times is empty, and a count past int.MaxValue must not reach the cast below.
+        // Empty text repeated any number of times is empty.
         if (text.Length == 0)
         {
             return Value.FromText(string.Empty);
@@ -790,6 +791,15 @@ internal static class TextFunctions
             return Value.ValueError;
         }
 
+        // An instance written out may not exceed the places where the shortest delimiter could start; Excel checks
+        // this before it searches, and only when the instance is given.
+        int shortest = delimiters.Min(delimiter => delimiter.Length);
+
+        if (call.IsMissing(2) == false && shortest > 0 && Math.Abs(instance) > text.Length - shortest + 1)
+        {
+            return Value.ValueError;
+        }
+
         StringComparison comparison = StringComparison.Ordinal;
 
         if (matchMode == 1)
@@ -850,7 +860,8 @@ internal static class TextFunctions
             return Around(text, chosen.Position, chosen.Length, before);
         }
 
-        if (matchEnd == 1 && wanted == matches.Count + 1)
+        // The end of the text counts as a delimiter only when the shortest delimiter would fit in the text.
+        if (matchEnd == 1 && wanted == matches.Count + 1 && shortest <= text.Length)
         {
             if (instance > 0)
             {

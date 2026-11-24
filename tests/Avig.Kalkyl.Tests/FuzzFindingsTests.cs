@@ -222,11 +222,12 @@ public class FuzzFindingsTests
     }
 
     [Theory]
-    [InlineData("=REPT(\"\",2147483648)", "")]
-    [InlineData("=REPT(\"\",1E+15)", "")]
-    public void REPT_of_empty_text_is_empty_for_any_count(string formula, string expected)
+    [InlineData("=REPT(\"\",2147483647)", "")]
+    [InlineData("=REPT(\"\",2147483648)", "#VALUE!")]
+    [InlineData("=REPT(\"\",1E+15)", "#VALUE!")]
+    public void REPT_of_empty_text_is_empty_up_to_Excels_largest_count(string formula, string expected)
     {
-        Assert.Equal((CellValue)expected, Formula.Evaluate(formula));
+        Assert.Equal(expected, Formula.Evaluate(formula).ToString());
     }
 
     [Theory]

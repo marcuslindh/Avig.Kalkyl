@@ -198,12 +198,22 @@ internal static class LogicalFunctions
                 continue;
             }
 
-            if (call.TryBool(index, out bool flag, out Value error) == false)
+            Value scalar = call.Scalar(index);
+
+            if (scalar.IsError == true)
             {
-                return error;
+                return scalar;
             }
 
-            result = combine(result, flag);
+            Value converted = Coerce.ToBool(scalar);
+
+            // Text written directly that is not TRUE or FALSE is skipped, as in a range: =AND(TRUE,"x") is TRUE.
+            if (converted.IsError == true)
+            {
+                continue;
+            }
+
+            result = combine(result, converted.Bool);
             any = true;
         }
 

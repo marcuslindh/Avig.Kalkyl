@@ -814,12 +814,21 @@ internal static class MathFunctions
                 return error;
             }
 
-            if (arrays.Count > 0 && (array.Rows != arrays[0].Rows || array.Columns != arrays[0].Columns))
+            arrays.Add(array);
+        }
+
+        if (arrays.Any(array => array.Rows != arrays[0].Rows || array.Columns != arrays[0].Columns) == true)
+        {
+            // Excel gives an error inside the arrays before it compares their sizes.
+            foreach (Value item in arrays.SelectMany(array => array.All()))
             {
-                return Value.ValueError;
+                if (item.IsError == true)
+                {
+                    return item;
+                }
             }
 
-            arrays.Add(array);
+            return Value.ValueError;
         }
 
         double sum = 0;
@@ -913,6 +922,12 @@ internal static class MathFunctions
                 return item;
             }
 
+            // Excel skips blank coefficients: the next one takes their power.
+            if (item.IsBlank == true)
+            {
+                continue;
+            }
+
             if (item.Kind != ValueKind.Number)
             {
                 return Value.ValueError;
@@ -979,8 +994,9 @@ internal static class MathFunctions
     }
 
     /// <summary>
-    /// AGGREGATE(function, options, ref1, …) for functions 1–13, and AGGREGATE(14, options, array, k)
-    /// for LARGE. Options 0–3 skip nested SUBTOTAL/AGGREGATE cells; 2, 3, 6 and 7 ignore errors.
+    /// AGGREGATE(function, options, ref1, …) for functions 1–13, which take only references, and
+    /// AGGREGATE(14–19, options, array, k) for LARGE, SMALL, PERCENTILE.INC, QUARTILE.INC, PERCENTILE.EXC
+    /// and QUARTILE.EXC. Options 0–3 skip nested SUBTOTAL/AGGREGATE cells; 2, 3, 6 and 7 ignore errors.
     /// Hidden rows are not tracked.
     /// </summary>
     private static Value Aggregate(FunctionCall call)
@@ -990,7 +1006,16 @@ internal static class MathFunctions
             return error;
         }
 
-        if (function < 1 || function > 14 || options < 0 || options > 7)
+        // An error written as an argument comes back before the function number is checked.
+        for (int index = 2; index < call.Count; index++)
+        {
+            if (call.IsMissing(index) == false && call.Raw(index).IsError == true)
+            {
+                return call.Raw(index);
+            }
+        }
+
+        if (function < 1 || function > 19 || options < 0 || options > 7)
         {
             return Value.ValueError;
         }
@@ -1000,7 +1025,7 @@ internal static class MathFunctions
         int last = call.Count;
         double rank = 0;
 
-        if (function == 14)
+        if (function >= 14)
         {
             if (call.Count != 4 || call.IsMissing(3) == true)
             {
@@ -1013,6 +1038,18 @@ internal static class MathFunctions
             }
 
             last = 3;
+        }
+
+        // Functions 1 to 13 take only references; the array form of 14 to 19 takes arrays as well.
+        if (function <= 13)
+        {
+            for (int index = 2; index < last; index++)
+            {
+                if (call.IsMissing(index) == false && call.Raw(index).Kind != ValueKind.Reference)
+                {
+                    return Value.ValueError;
+                }
+            }
         }
 
         if (TryCollectItems(call, 2, last, skipNested, out List<Value> items, out error) == false)
@@ -1164,8 +1201,23 @@ internal static class MathFunctions
             case 13:
                 return Mode(numbers);
 
+            case 14:
+                return StatisticalFunctionsOrder.Nth(numbers, rank, true);
+
+            case 15:
+                return StatisticalFunctionsOrder.Nth(numbers, rank, false);
+
+            case 16:
+                return StatisticalFunctionsOrder.Percentile(numbers, rank, false);
+
+            case 17:
+                return StatisticalFunctionsOrder.Quartile(numbers, rank, false);
+
+            case 18:
+                return StatisticalFunctionsOrder.Percentile(numbers, rank, true);
+
             default:
-                return Large(numbers, rank);
+                return StatisticalFunctionsOrder.Quartile(numbers, rank, true);
         }
     }
 
@@ -1245,19 +1297,6 @@ internal static class MathFunctions
         }
 
         return Value.FromNumber(best);
-    }
-
-    /// <summary>LARGE: the k-th largest number, k rounded up; #NUM! when k is out of range.</summary>
-    private static Value Large(List<double> numbers, double rank)
-    {
-        if (rank <= 0 || Math.Ceiling(rank) > numbers.Count)
-        {
-            return Value.Num;
-        }
-
-        List<double> sorted = [.. numbers.OrderDescending()];
-
-        return Value.FromNumber(sorted[(int)Math.Ceiling(rank) - 1]);
     }
 
     // ---- Number systems ----

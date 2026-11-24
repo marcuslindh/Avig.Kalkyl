@@ -488,6 +488,12 @@ internal static class DateFunctions
         {
             holidaysIndex = 3;
 
+            // Excel checks the weekend first here, and an error in its place is #VALUE!.
+            if (call.IsMissing(2) == false && call.Scalar(2).IsError == true)
+            {
+                return Value.ValueError;
+            }
+
             if (TryWeekend(call, 2, out weekend, out error) == false)
             {
                 return error;
@@ -540,9 +546,24 @@ internal static class DateFunctions
         bool[] weekend = DefaultWeekend();
         Value error;
 
+        if (TryDay(call, 0, out long start, out error) == false || call.TryInteger(1, out long days, out error) == false)
+        {
+            return error;
+        }
+
+        // WORKDAY.INTL checks the weekend after the start and the days, and an error in its place is #NUM!; moving no
+        // days gives the start whatever the weekend is.
         if (international == true)
         {
             holidaysIndex = 3;
+        }
+
+        if (international == true && days != 0)
+        {
+            if (call.IsMissing(2) == false && call.Scalar(2).IsError == true)
+            {
+                return Value.Num;
+            }
 
             if (TryWeekend(call, 2, out weekend, out error) == false)
             {
@@ -550,11 +571,14 @@ internal static class DateFunctions
             }
         }
 
-        if (TryDay(call, 0, out long start, out error) == false
-            || call.TryInteger(1, out long days, out error) == false
-            || TryHolidays(call, holidaysIndex, out HashSet<long> holidays, out error) == false)
+        if (TryHolidays(call, holidaysIndex, out HashSet<long> holidays, out error) == false)
         {
             return error;
+        }
+
+        if (days != 0 && weekend.All(day => day == true) == true)
+        {
+            return Value.ValueError;
         }
 
         double maximum = MaxSerial(call.Uses1904);
@@ -593,9 +617,8 @@ internal static class DateFunctions
     /// </summary>
     private static Value YearFrac(FunctionCall call)
     {
-        if (TryDay(call, 0, out long start, out Value error) == false
-            || TryDay(call, 1, out long end, out error) == false
-            || call.TryInteger(2, 0, out long basis, out error) == false)
+        // Excel checks the basis before the dates.
+        if (call.TryInteger(2, 0, out long basis, out Value error) == false)
         {
             return error;
         }
@@ -603,6 +626,11 @@ internal static class DateFunctions
         if (basis < 0 || basis > 4)
         {
             return Value.Num;
+        }
+
+        if (TryDay(call, 0, out long start, out error) == false || TryDay(call, 1, out long end, out error) == false)
+        {
+            return error;
         }
 
         if (start > end)
@@ -656,11 +684,18 @@ internal static class DateFunctions
             return Value.FromNumber(days / yearLength);
         }
 
-        TrySerialOf(first.Year, 1, 1, uses1904, out long firstJanuary);
-        TrySerialOf(second.Year + 1L, 1, 1, uses1904, out long afterLast);
-        double average = (afterLast - firstJanuary) / (double)(second.Year - first.Year + 1);
+        // The average length of the years spanned, from the real calendar: Excel's 29 February 1900 does not count here.
+        long years = second.Year - first.Year + 1L;
+        long length = (365 * years) + LeapYearsThrough(second.Year) - LeapYearsThrough(first.Year - 1);
+        double average = length / (double)years;
 
         return Value.FromNumber(days / average);
+    }
+
+    /// <summary>The leap years of the Gregorian calendar from year 1 through <paramref name="year"/>.</summary>
+    private static long LeapYearsThrough(long year)
+    {
+        return (year / 4) - (year / 100) + (year / 400);
     }
 
     /// <summary>YEARFRAC basis 0, which treats the last day of February differently from DAYS360.</summary>
@@ -737,7 +772,8 @@ internal static class DateFunctions
             string text = scalar.Text!;
             weekend = new bool[7];
 
-            if (text.Length != 7 || text.All(letter => letter is '0' or '1') == false || text.All(letter => letter == '1') == true)
+            // "1111111" is allowed here: NETWORKDAYS.INTL counts no days, and WORKDAY.INTL refuses it unless it moves no days.
+            if (text.Length != 7 || text.All(letter => letter is '0' or '1') == false)
             {
                 error = Value.ValueError;
 

@@ -149,7 +149,7 @@ public class DateFunctionTests
     [InlineData("=DATEDIF(DATE(2003,1,1),DATE(2001,1,1),\"Y\")", "#NUM!")]
     [InlineData("=DATEDIF(DATE(2001,1,1),DATE(2003,1,1),\"W\")", "#NUM!")]
     [InlineData("=NETWORKDAYS.INTL(1,10,0)", "#NUM!")]
-    [InlineData("=NETWORKDAYS.INTL(1,10,\"1111111\")", "#VALUE!")]
+    [InlineData("=WORKDAY.INTL(1,5,\"1111111\")", "#VALUE!")]
     [InlineData("=NETWORKDAYS.INTL(1,10,\"001\")", "#VALUE!")]
     [InlineData("=NETWORKDAYS(1,10,\"holiday\")", "#VALUE!")]
     [InlineData("=WORKDAY.INTL(DATE(2012,1,1),30,0)", "#NUM!")]

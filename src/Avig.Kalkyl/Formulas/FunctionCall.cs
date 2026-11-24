@@ -303,8 +303,11 @@ internal sealed class FunctionCall
     /// With <paramref name="includeTextAndBooleans"/> (the …A functions such as AVERAGEA), text
     /// and booleans in references count as 0 and 1/0 instead of being skipped.
     /// </para>
+    /// <para>
+    /// With <paramref name="skipText"/> (MODE), text written directly is skipped as well instead of converted.
+    /// </para>
     /// </summary>
-    public bool TryCollectNumbers(int first, bool includeTextAndBooleans, out List<double> numbers, out Value error)
+    public bool TryCollectNumbers(int first, bool includeTextAndBooleans, out List<double> numbers, out Value error, bool skipText = false)
     {
         numbers = [];
         error = Value.Blank;
@@ -349,7 +352,7 @@ internal sealed class FunctionCall
 
             Value scalar = Scalar(index);
 
-            if (scalar.IsBlank == true)
+            if (scalar.IsBlank == true || (skipText == true && scalar.Kind == ValueKind.Text))
             {
                 continue;
             }

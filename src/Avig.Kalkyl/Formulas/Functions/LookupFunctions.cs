@@ -139,11 +139,25 @@ internal static class LookupFunctions
             return lookup;
         }
 
-        if (call.TryArray(1, out ValueArray table, out Value error) == false
-            || call.TryInteger(2, out long index, out error) == false
-            || call.TryBool(3, true, out bool approximate, out error) == false)
+        if (call.TryArray(1, out ValueArray table, out Value error) == false)
         {
             return error;
+        }
+
+        // Text as the table is refused before the index and the match are read, another single value after them.
+        if (IsTextTable(call) == true)
+        {
+            return Value.ValueError;
+        }
+
+        if (call.TryInteger(2, out long index, out error) == false || call.TryBool(3, true, out bool approximate, out error) == false)
+        {
+            return error;
+        }
+
+        if (call.IsRangeOrArray(1) == false)
+        {
+            return Value.NA;
         }
 
         long size = table.Rows;
@@ -151,16 +165,6 @@ internal static class LookupFunctions
         if (vertical == true)
         {
             size = table.Columns;
-        }
-
-        if (index < 1)
-        {
-            return Value.ValueError;
-        }
-
-        if (index > size)
-        {
-            return Value.Ref;
         }
 
         if (lookup.IsBlank == true)
@@ -177,9 +181,20 @@ internal static class LookupFunctions
 
         int found = FindLegacy(lookup, keys, approximate, true);
 
+        // Excel searches before it checks the index: a value that is not found is #N/A whatever the index.
         if (found < 0)
         {
             return Value.NA;
+        }
+
+        if (index < 1)
+        {
+            return Value.ValueError;
+        }
+
+        if (index > size)
+        {
+            return Value.Ref;
         }
 
         if (vertical == true)
@@ -188,6 +203,15 @@ internal static class LookupFunctions
         }
 
         return table[(int)index - 1, found];
+    }
+
+    /// <summary>
+    /// Whether the table of VLOOKUP, HLOOKUP or MATCH is text written as a single value, which Excel refuses with
+    /// #VALUE! at once. Another single value is #N/A once the other arguments have been read.
+    /// </summary>
+    private static bool IsTextTable(FunctionCall call)
+    {
+        return call.IsRangeOrArray(1) == false && call.Scalar(1).Kind == ValueKind.Text;
     }
 
     /// <summary>
@@ -263,9 +287,24 @@ internal static class LookupFunctions
             return lookup;
         }
 
-        if (call.TryArray(1, out ValueArray source, out Value error) == false || call.TryNumber(2, 1, out double type, out error) == false)
+        if (call.TryArray(1, out ValueArray source, out Value error) == false)
         {
             return error;
+        }
+
+        if (IsTextTable(call) == true)
+        {
+            return Value.ValueError;
+        }
+
+        if (call.TryNumber(2, 1, out double type, out error) == false)
+        {
+            return error;
+        }
+
+        if (call.IsRangeOrArray(1) == false)
+        {
+            return Value.NA;
         }
 
         if (TryVector(source, out Value[] items) == false || lookup.IsBlank == true)
@@ -298,9 +337,9 @@ internal static class LookupFunctions
 
     /// <summary>
     /// XLOOKUP(value, lookup, return, [if_not_found], [match_mode], [search_mode]). Match modes:
-    /// 0 exact, -1 exact or next smaller, 1 exact or next larger, 2 wildcards. Search modes: 1
-    /// first to last, -1 last to first, 2 binary in ascending order, -2 binary in descending order.
-    /// A reference to return from gives a reference back.
+    /// 0 exact, -1 exact or next smaller, 1 exact or next larger, 2 wildcards, 3 a regular expression.
+    /// Search modes: 1 first to last, -1 last to first, 2 binary in ascending order, -2 binary in
+    /// descending order. A reference to return from gives a reference back.
     /// </summary>
     private static Value XLookup(FunctionCall call)
     {
@@ -311,15 +350,9 @@ internal static class LookupFunctions
             return lookup;
         }
 
-        if (call.TryArray(1, out ValueArray source, out Value error) == false
-            || TryModes(call, 4, out long matchMode, out long searchMode, out error) == false)
+        if (call.TryArray(1, out ValueArray source, out Value error) == false)
         {
             return error;
-        }
-
-        if (TryVector(source, out Value[] items) == false)
-        {
-            return Value.ValueError;
         }
 
         Value returned = call.Raw(2);
@@ -329,8 +362,48 @@ internal static class LookupFunctions
             return returned;
         }
 
+        if (TryModes(call, 4, out long matchMode, out long searchMode, out error) == false)
+        {
+            return error;
+        }
+
+        if (TryVector(source, out Value[] items) == false || TryExpression(lookup, matchMode, out Regex? expression) == false)
+        {
+            return Value.ValueError;
+        }
+
         bool vertical = source.Columns == 1;
-        int found = Find(lookup, items, matchMode, searchMode);
+        ValueArray results = new(1, 1);
+        int length;
+
+        // The return must be as long as the lookup, which Excel checks before it searches.
+        if (returned.Kind == ValueKind.Reference)
+        {
+            length = UsedColumns(returned.Reference!);
+
+            if (vertical == true)
+            {
+                length = UsedRows(returned.Reference!);
+            }
+        }
+        else
+        {
+            results = call.Evaluator.ToValueArray(returned);
+            length = results.Columns;
+
+            if (vertical == true)
+            {
+                length = results.Rows;
+            }
+        }
+
+        // A single value to look in is not checked: Excel returns from the start of the return array.
+        if (length != items.Length && call.IsRangeOrArray(1) == true)
+        {
+            return Value.ValueError;
+        }
+
+        int found = Find(lookup, items, matchMode, searchMode, expression, Extent(call.Raw(1), items.Length));
 
         if (found < 0)
         {
@@ -348,37 +421,20 @@ internal static class LookupFunctions
 
             if (vertical == true)
             {
-                if (UsedRows(range) != items.Length)
-                {
-                    return Value.ValueError;
-                }
-
                 return Value.FromReference(range with { FirstRow = range.FirstRow + found, LastRow = range.FirstRow + found });
-            }
-
-            if (UsedColumns(range) != items.Length)
-            {
-                return Value.ValueError;
             }
 
             return Value.FromReference(range with { FirstColumn = range.FirstColumn + found, LastColumn = range.FirstColumn + found });
         }
 
-        ValueArray results = call.Evaluator.ToValueArray(returned);
+        if (found >= items.Length && call.IsRangeOrArray(1) == true)
+        {
+            return Value.Blank;
+        }
 
         if (vertical == true)
         {
-            if (results.Rows != items.Length)
-            {
-                return Value.ValueError;
-            }
-
             return Slice(results, found, found, 0, results.Columns - 1);
-        }
-
-        if (results.Columns != items.Length)
-        {
-            return Value.ValueError;
         }
 
         return Slice(results, 0, results.Rows - 1, found, found);
@@ -400,12 +456,12 @@ internal static class LookupFunctions
             return error;
         }
 
-        if (TryVector(source, out Value[] items) == false)
+        if (TryVector(source, out Value[] items) == false || TryExpression(lookup, matchMode, out Regex? expression) == false)
         {
             return Value.ValueError;
         }
 
-        int found = Find(lookup, items, matchMode, searchMode);
+        int found = Find(lookup, items, matchMode, searchMode, expression, Extent(call.Raw(1), items.Length));
 
         if (found < 0)
         {
@@ -787,21 +843,115 @@ internal static class LookupFunctions
 
     private static bool TryModes(FunctionCall call, int index, out long matchMode, out long searchMode, out Value error)
     {
+        matchMode = 0;
         searchMode = 1;
 
-        if (call.TryInteger(index, 0, out matchMode, out error) == false || call.TryInteger(index + 1, 1, out searchMode, out error) == false)
+        if (call.TryNumber(index, 0, out double match, out error) == false || call.TryInteger(index + 1, 1, out searchMode, out error) == false)
         {
             return false;
         }
 
-        if (matchMode is < -1 or > 2 || searchMode is not (1 or -1 or 2 or -2))
+        // Excel rounds the match mode down, so -1.5 is -2, which is no mode. A regular expression cannot be searched in binary.
+        if (match < -1 || match >= 4 || searchMode is not (1 or -1 or 2 or -2) || (match >= 3 && searchMode is 2 or -2))
         {
             error = Value.ValueError;
 
             return false;
         }
 
+        matchMode = (long)Math.Floor(match);
+
         return true;
+    }
+
+    /// <summary>
+    /// The regular expression of match mode 3: the lookup value as text, case-sensitive, matching anywhere in an item.
+    /// It runs without backtracking, so that a pattern in a formula cannot take exponential time; Excel's lookarounds
+    /// and backreferences are not available and give #VALUE!, as an invalid pattern does. Other modes need none.
+    /// </summary>
+    private static bool TryExpression(Value lookup, long matchMode, out Regex? expression)
+    {
+        expression = null;
+
+        if (matchMode != 3)
+        {
+            return true;
+        }
+
+        Value text = Coerce.ToText(lookup);
+
+        if (text.IsError == true)
+        {
+            return false;
+        }
+
+        try
+        {
+            expression = new Regex(text.Text!, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking, TimeSpan.FromSeconds(1));
+
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Whether an item matches match mode 3: text and numbers as text, a blank as empty text; booleans never.</summary>
+    private static bool IsExpressionMatch(Regex expression, Value item)
+    {
+        if (item.IsBlank == true)
+        {
+            return expression.IsMatch(string.Empty);
+        }
+
+        if (item.Kind is not (ValueKind.Text or ValueKind.Number))
+        {
+            return false;
+        }
+
+        return expression.IsMatch(Coerce.ToText(item).Text!);
+    }
+
+    /// <summary>
+    /// The first blank item in the order of the search. Excel's next-larger match takes a blank cell when no
+    /// item is larger, as if a blank were larger than anything.
+    /// </summary>
+    private static int FirstBlank(Value[] items, long searchMode, int extent)
+    {
+        bool backwards = searchMode is -1 or -2;
+
+        // The cells past the used ones are blank: the first of them going forwards, the last going backwards.
+        if (backwards == true && extent > items.Length)
+        {
+            return extent - 1;
+        }
+
+        for (int step = 0; step < items.Length; step++)
+        {
+            int index = step;
+
+            if (backwards == true)
+            {
+                index = items.Length - 1 - step;
+            }
+
+            if (items[index].IsBlank == true)
+            {
+                return index;
+            }
+        }
+
+        if (extent > items.Length)
+        {
+            return items.Length;
+        }
+
+        return -1;
     }
 
     /// <summary>The search of MATCH, VLOOKUP, HLOOKUP and LOOKUP: binary for approximate, linear for exact.</summary>
@@ -826,7 +976,36 @@ internal static class LookupFunctions
     }
 
     /// <summary>The search of XLOOKUP and XMATCH.</summary>
-    private static int Find(Value lookup, Value[] items, long matchMode, long searchMode)
+    private static int Find(Value lookup, Value[] items, long matchMode, long searchMode, Regex? expression, int extent)
+    {
+        int found = Search(lookup, items, matchMode, searchMode, expression);
+
+        if (found < 0 && matchMode == 1)
+        {
+            return FirstBlank(items, searchMode, extent);
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The length of the vector looked in, counting the blank cells of a reference past the used ones, which the
+    /// items leave out.
+    /// </summary>
+    private static int Extent(Value source, int used)
+    {
+        if (source.Kind != ValueKind.Reference)
+        {
+            return used;
+        }
+
+        RangeReference range = source.Reference!;
+        long length = Math.Max((long)range.LastRow - range.FirstRow + 1, (long)range.LastColumn - range.FirstColumn + 1);
+
+        return (int)Math.Clamp(length, used, int.MaxValue);
+    }
+
+    private static int Search(Value lookup, Value[] items, long matchMode, long searchMode, Regex? expression)
     {
         if (searchMode is 2 or -2)
         {
@@ -841,23 +1020,23 @@ internal static class LookupFunctions
             {
                 if (sign == 1)
                 {
-                    return LastAtMost(lookup, items, sign);
+                    return LastAtMost(lookup, items, sign, true);
                 }
 
-                return FirstAtLeast(lookup, items, sign);
+                return FirstAtLeast(lookup, items, sign, true);
             }
 
             if (matchMode == 1)
             {
                 if (sign == 1)
                 {
-                    return FirstAtLeast(lookup, items, sign);
+                    return FirstAtLeast(lookup, items, sign, true);
                 }
 
-                return LastAtMost(lookup, items, sign);
+                return LastAtMost(lookup, items, sign, true);
             }
 
-            int candidate = FirstAtLeast(lookup, items, sign);
+            int candidate = FirstAtLeast(lookup, items, sign, true);
 
             if (candidate >= 0 && Coerce.Compare(items[candidate], lookup) == 0)
             {
@@ -881,12 +1060,23 @@ internal static class LookupFunctions
 
             Value item = items[index];
 
+            if (expression is not null)
+            {
+                if (IsExpressionMatch(expression, item) == true)
+                {
+                    return index;
+                }
+
+                continue;
+            }
+
             if (IsExact(lookup, item, hasPattern, pattern) == true)
             {
                 return index;
             }
 
-            if (matchMode is -1 or 1 && IsComparable(lookup, item) == true)
+            // Next smaller and next larger compare across kinds in Excel's order: numbers, then text, then booleans.
+            if (matchMode is -1 or 1 && IsComparable(lookup, item, true) == true)
             {
                 int comparison = Coerce.Compare(item, lookup) * (int)matchMode;
 
@@ -905,9 +1095,9 @@ internal static class LookupFunctions
     /// A binary search for the last item ≤ the lookup value (sign 1, ascending order) or ≥ it
     /// (sign -1, descending order), among the items of the lookup value's kind.
     /// </summary>
-    private static int LastAtMost(Value lookup, Value[] items, int sign)
+    private static int LastAtMost(Value lookup, Value[] items, int sign, bool anyKind = false)
     {
-        List<int> positions = Comparable(lookup, items);
+        List<int> positions = Comparable(lookup, items, anyKind);
         int low = 0;
         int high = positions.Count - 1;
         int found = -1;
@@ -931,9 +1121,9 @@ internal static class LookupFunctions
     }
 
     /// <summary>A binary search for the first item ≥ the lookup value (sign 1) or ≤ it (sign -1).</summary>
-    private static int FirstAtLeast(Value lookup, Value[] items, int sign)
+    private static int FirstAtLeast(Value lookup, Value[] items, int sign, bool anyKind = false)
     {
-        List<int> positions = Comparable(lookup, items);
+        List<int> positions = Comparable(lookup, items, anyKind);
         int low = 0;
         int high = positions.Count - 1;
         int found = -1;
@@ -956,13 +1146,13 @@ internal static class LookupFunctions
         return found;
     }
 
-    private static List<int> Comparable(Value lookup, Value[] items)
+    private static List<int> Comparable(Value lookup, Value[] items, bool anyKind)
     {
         List<int> positions = [];
 
         for (int index = 0; index < items.Length; index++)
         {
-            if (IsComparable(lookup, items[index]) == true)
+            if (IsComparable(lookup, items[index], anyKind) == true)
             {
                 positions.Add(index);
             }
@@ -971,9 +1161,13 @@ internal static class LookupFunctions
         return positions;
     }
 
-    private static bool IsComparable(Value lookup, Value item)
+    /// <summary>
+    /// Whether an item takes part in an ordered search: a number, text or boolean of the lookup value's kind, or of
+    /// any of those kinds for XLOOKUP and XMATCH (<paramref name="anyKind"/>). Blanks and errors never do.
+    /// </summary>
+    private static bool IsComparable(Value lookup, Value item, bool anyKind = false)
     {
-        return item.Kind == lookup.Kind && item.Kind is ValueKind.Number or ValueKind.Text or ValueKind.Bool;
+        return (anyKind == true || item.Kind == lookup.Kind) && item.Kind is ValueKind.Number or ValueKind.Text or ValueKind.Bool;
     }
 
     private static bool TryPattern(Value lookup, bool wildcards, out Regex pattern)
