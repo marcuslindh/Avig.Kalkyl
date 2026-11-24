@@ -46,6 +46,41 @@ public class DrawingTests
         Assert.Single(SheetPart(document, "Rapport").DrawingsPart!.ChartParts);
     }
 
+    [Theory]
+    [InlineData(IconSetKind.ThreeArrows, "3Arrows", 3)]
+    [InlineData(IconSetKind.ThreeArrowsGray, "3ArrowsGray", 3)]
+    [InlineData(IconSetKind.ThreeFlags, "3Flags", 3)]
+    [InlineData(IconSetKind.ThreeTrafficLights, "3TrafficLights1", 3)]
+    [InlineData(IconSetKind.ThreeTrafficLightsRimmed, "3TrafficLights2", 3)]
+    [InlineData(IconSetKind.ThreeSigns, "3Signs", 3)]
+    [InlineData(IconSetKind.ThreeSymbols, "3Symbols", 3)]
+    [InlineData(IconSetKind.ThreeSymbolsUncircled, "3Symbols2", 3)]
+    [InlineData(IconSetKind.FourArrows, "4Arrows", 4)]
+    [InlineData(IconSetKind.FourArrowsGray, "4ArrowsGray", 4)]
+    [InlineData(IconSetKind.FourRedToBlack, "4RedToBlack", 4)]
+    [InlineData(IconSetKind.FourRating, "4Rating", 4)]
+    [InlineData(IconSetKind.FourTrafficLights, "4TrafficLights", 4)]
+    [InlineData(IconSetKind.FiveArrows, "5Arrows", 5)]
+    [InlineData(IconSetKind.FiveArrowsGray, "5ArrowsGray", 5)]
+    [InlineData(IconSetKind.FiveRating, "5Rating", 5)]
+    [InlineData(IconSetKind.FiveQuarters, "5Quarters", 5)]
+    public async Task Every_icon_set_gets_Excels_name_and_one_threshold_per_icon(IconSetKind icons, string name, int count)
+    {
+        await using MemoryStream file = await TestFiles.WriteAsync(async writer =>
+        {
+            SheetWriter data = await TestFiles.AddSheetAsync(writer, "Data");
+            await WriteDataAsync(data);
+            data.AddConditionalFormat("B2:B7", ConditionalFormat.IconSet(icons));
+        });
+
+        AssertValid(file);
+
+        using SpreadsheetDocument document = SpreadsheetDocument.Open(file, false);
+        Excel.IconSet iconSet = SheetPart(document, "Data").Worksheet!.Descendants<Excel.IconSet>().Single();
+        Assert.Equal(name, iconSet.IconSetValue!.InnerText);
+        Assert.Equal(count, iconSet.Elements<Excel.ConditionalFormatValueObject>().Count());
+    }
+
     [Fact]
     public async Task The_document_model_writes_the_same_in_a_new_file()
     {
