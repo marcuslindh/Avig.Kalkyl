@@ -320,7 +320,7 @@ public sealed class XlsxReader : IAsyncDisposable
         {
             await archive.DisposeAsync();
 
-            return Result<XlsxReader>.Invalid($"The file is not a valid .xlsx workbook: {exception.Message}");
+            return Result<XlsxReader>.Invalid(KalkylError.Describe(exception));
         }
     }
 
@@ -466,7 +466,7 @@ public sealed class XlsxReader : IAsyncDisposable
 
                 if (strings.Count >= limit)
                 {
-                    throw new InvalidDataException($"the file has more than {limit:N0} shared strings, the limit set in KalkylLimits.MaxSharedStrings.");
+                    throw new InvalidDataException($"The file has more than {limit:N0} shared strings, the limit set in KalkylLimits.MaxSharedStrings.");
                 }
 
                 strings.Add(await XmlParts.ReadRichTextAsync(reader));

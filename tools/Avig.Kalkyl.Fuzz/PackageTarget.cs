@@ -271,6 +271,15 @@ internal static class PackageTarget
         return stream;
     }
 
+    /// <summary>A refused file must have a kind an application can show its users (SEC-10).</summary>
+    private static void CheckKind(KalkylErrorKind kind, string? error)
+    {
+        if (kind == KalkylErrorKind.Unknown)
+        {
+            throw new InvariantViolationException($"A refusal has no error kind: {error}");
+        }
+    }
+
     /// <summary>Reads every cell of every sheet with the streaming reader.</summary>
     internal static async Task ReadEverythingAsync(Stream file)
     {
@@ -278,6 +287,8 @@ internal static class PackageTarget
 
         if (opened.IsSuccess(out XlsxReader? reader) == false)
         {
+            CheckKind(opened.ErrorKind(), opened.Error);
+
             return;
         }
 
@@ -287,8 +298,12 @@ internal static class PackageTarget
             {
                 // A sheet that points to a part that is not there is listed and then refused with
                 // Invalid; that is a Result failure, which is the contract.
-                if (reader.Sheet(index).IsSuccess(out SheetReader? sheet) == false)
+                Result<SheetReader> found = reader.Sheet(index);
+
+                if (found.IsSuccess(out SheetReader? sheet) == false)
                 {
+                    CheckKind(found.ErrorKind(), found.Error);
+
                     continue;
                 }
 
@@ -308,7 +323,14 @@ internal static class PackageTarget
     {
         Result<Workbook> opened = await Workbook.OpenAsync(file);
 
-        if (opened.IsSuccess(out Workbook? book) == false || book.Sheets.Count == 0)
+        if (opened.IsSuccess(out Workbook? book) == false)
+        {
+            CheckKind(opened.ErrorKind(), opened.Error);
+
+            return;
+        }
+
+        if (book.Sheets.Count == 0)
         {
             return;
         }

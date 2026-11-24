@@ -243,8 +243,24 @@ starts with `=`, `+`, `-` or `@`. Only `Cell.FromFormula` and `Worksheet.SetForm
 formulas, so never give them text from a user.
 
 **Error messages** name the file path you gave, sheet names and the content of the cell that
-was wrong. They are for your log, not for the person who uploaded the file. Show them
-`Result.Status` and a message of your own.
+was wrong. They are for your log, not for the person who uploaded the file. Show them a
+message of your own, chosen by `ErrorKind()`: `NotFound`, `NotXlsx` (an .xls, a
+password-protected file, a CSV), `Damaged`, `TooLarge` (past a `KalkylLimits` value) or
+`Inaccessible` (another program holds the file). It works on a `Result`, a `Result<T>` and on
+the `InvalidDataException` that `XlsxReader` throws for a damaged row.
+
+```csharp
+if (opened.IsFailure(out string? error, out _) == true)
+{
+    logger.LogWarning("Upload rejected: {Error}", error);
+    string shown = opened.ErrorKind() switch
+    {
+        KalkylErrorKind.TooLarge => "The file is too large.",
+        KalkylErrorKind.NotXlsx => "Upload an .xlsx file.",
+        _ => "The file could not be read.",
+    };
+}
+```
 
 **Concurrency.** A `Workbook` or `XlsxReader` is not safe to change from several threads at
 once; separate instances are independent, also with different limits. The limits hold per file,

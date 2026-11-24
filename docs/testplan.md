@@ -84,7 +84,7 @@ Alla brister i tabellen ovan är åtgärdade och har regressionstester i
 | SEC-06 | Avbrott kontrolleras per rad i matriser, i villkorsloopar och i glesa uppräkningar. |
 | SEC-07 (P02, P03) | `XmlParts.CheckEntriesAsync` ger `Invalid` för dubbletter, tomma namn och namn utanför paketet. |
 | SEC-09 | Testet `The_package_uses_no_network_process_deserialization_or_unsafe_code` skannar källkoden. |
-| SEC-10 | Dokumenterat: felmeddelanden är till för loggen. **Felkoder är inte införda.** |
+| SEC-10 | `KalkylErrorKind` och `ErrorKind()` ger en felkod som går att visa: `NotFound`, `NotXlsx`, `Damaged`, `TooLarge` eller `Inaccessible`. Meddelandet är till för loggen. Fuzzern kräver en felkod för varje fil som avvisas. |
 | SEC-11 | Testat, och det finns en varning i `Cell.FromFormula` och `Worksheet.SetFormula`. |
 | SEC-12 | Varje post öppnas en gång när filen öppnas. En komprimeringsmetod som inte stöds och en krypterad post ger `Invalid`. |
 | FUN-01 (P15) | Aggregat- och villkorsfunktioner över stora, glesa områden läser bara cellerna som finns. `SUM(A:XFD)` ger 8 på 30 ms. `SUMIF` och `SUMIFS` går via samma väg som `AVERAGEIF`. |
@@ -105,7 +105,6 @@ Det som återstår kräver en miljö eller ett beslut:
   och kör i timmar.
 - **FUZ-03 (Z-06):** svepet över heltalsattribut är inte byggt.
 - **6.3:** barnprocessen för korpusen är inte automatiserad.
-- **SEC-10:** felkoder som kan visas utan risk. Det är ett API-beslut.
 - **DEP-02:** licenskontroll och SBOM i CI. Repot har ingen CI än.
 - **Prestanda:** funktioner över hela kolumner kostar 200–280 ns per rad, så 10 000 löpande SUMIF tar 20 sekunder. Det kräver en annan lagring av cellerna (`docs/benchmarks/baseline.md`).
 
@@ -751,7 +750,7 @@ efter risk.
 | 8 | Dubbla postnamn ger tolkningsskillnad (P02) | Låg | Hög där ett filter används | Medel | S-12 | `Invalid` vid dubbletter | Åtgärdad 2026-11-24: `Invalid` |
 | 9 | Postnamn för zip slip följer med när filen sparas (P03) | Låg | Hög hos den som packar upp längre fram | Medel | S-11 | Avvisa eller ta bort sådana namn | Åtgärdad 2026-11-24: `Invalid` |
 | 10 | Makron följer med när filen "tvättas" (P01) | Medel | Medel | Medel | S-16 | `HasMacros` och ett val för att ta bort dem, eller dokumentation | Åtgärdad 2026-11-24: `HasMacros` och `RemoveMacros` |
-| 11 | Felmeddelanden läcker sökvägar och innehåll (S-22) | Medel | Låg till medel | Medel | S-22 | Dokumentation och felkoder | Dokumenterad i README och XML-dokumentationen. Felkoder är inte införda. |
+| 11 | Felmeddelanden läcker sökvägar och innehåll (S-22) | Medel | Låg till medel | Medel | S-22 | Dokumentation och felkoder | Åtgärdad 2026-11-24: `KalkylErrorKind`, och meddelandena är dokumenterade som loggtext |
 | 12 | Formelinjektion vid export (S-14) | Medel | Medel hos den som öppnar filen | Medel | S-14 | Finns: text blir aldrig formel. Dokumentera `FromFormula`. | Åtgärdad: test och varning i `Cell.FromFormula` |
 | 13 | Okända undantag från zip-lagret (S-10, `NotSupportedException`) | Låg | Medel | Låg till medel | Z-03 | Fånga och returnera `Invalid` | Åtgärdad 2026-11-24: `CheckEntriesAsync` öppnar varje post |
 | 14 | Allokeringstryck vid många formler (P11) | Medel | Låg | Låg | P-11 | Profilera `Recalculator` | Åtgärdad 2026-11-24: öppning 11 kB per cell i stället för 67 kB; omräkning 2 kB per formel |

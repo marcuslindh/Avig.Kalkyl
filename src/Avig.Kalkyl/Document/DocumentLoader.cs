@@ -57,7 +57,7 @@ internal static class DocumentLoader
             }
             catch (InvalidDataException exception)
             {
-                return Result.Invalid(exception.Message);
+                return Result.Invalid(KalkylError.Describe(exception));
             }
         }
 

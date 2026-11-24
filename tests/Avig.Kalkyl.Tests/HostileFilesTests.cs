@@ -63,6 +63,9 @@ public class HostileFilesTests
         return TestFiles.Package([.. parts]);
     }
 
+    /// <summary>The kinds a refused hostile file may have: every refusal must be one an application can show.</summary>
+    private static readonly KalkylErrorKind[] Refusals = [KalkylErrorKind.Damaged, KalkylErrorKind.TooLarge, KalkylErrorKind.NotXlsx];
+
     private static async Task<string> RefusedAsync(MemoryStream file)
     {
         Result<XlsxReader> reader = await XlsxReader.OpenAsync(file, true);
@@ -86,17 +89,20 @@ public class HostileFilesTests
                     }
                 });
                 streaming = damaged.Message;
+                Assert.Contains(damaged.ErrorKind(), Refusals);
             }
         }
         else
         {
             streaming = reader.Error!;
+            Assert.Contains(reader.ErrorKind(), Refusals);
         }
 
         file.Position = 0;
         Result<Workbook> book = await Workbook.OpenAsync(file);
         Assert.True(book.IsFailure(out string? error, out ResultStatus status), "The document model opened the file.");
         Assert.Equal(ResultStatus.Invalid, status);
+        Assert.True(Refusals.Contains(book.ErrorKind()), $"No error kind for: {error}");
 
         return streaming + " | " + error;
     }
@@ -255,6 +261,7 @@ public class HostileFilesTests
 
         Assert.True(reader.IsFailure(out string? error, out _));
         Assert.Contains("MaxSharedStrings", error, StringComparison.Ordinal);
+        Assert.Equal(KalkylErrorKind.TooLarge, reader.ErrorKind());
         Assert.True(enough.IsSuccess(out XlsxReader? opened));
         await opened.DisposeAsync();
     }
