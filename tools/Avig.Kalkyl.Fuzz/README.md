@@ -133,7 +133,8 @@ dotnet run -c Release -- xlsx-part --repro <file> --dump C:\temp\dump
 ```
 
 To run every saved input (`corpus/` and `findings/`) in a process of its own, with a time limit and a 1 GiB heap, use `./corpus-check.ps1`. That catches the stack overflows, out-of-memory failures and hangs that end or stall the smoke runner.
- are saved in `findings/<target>/` as `crash-<seed>-<iteration>.bin`. An input that
+
+Findings are saved in `findings/<target>/` as `crash-<seed>-<iteration>.bin`. An input that
 takes more than two seconds is saved as `slow-…`. A stack overflow ends the process before any
 `catch` runs. In that case, run again with the same `--seed` and add `--trace`: every input is
 then written to `findings/<target>/last-input.bin` before it runs. `findings/` is not under
@@ -150,12 +151,31 @@ Two programs are needed:
 ./fuzz.ps1 -Target xlsx-part                              # 60 s
 ./fuzz.ps1 -Target formula -RuntimeSeconds 600 -Workers 4
 ./fuzz.ps1 -Target roundtrip -RuntimeSeconds 28800         # overnight
+./fuzz-night.ps1 -TotalHours 8 -Workers 4                  # every target in turn, then corpus-check
 ```
 
 The script publishes the harness and instruments only `Avig.Kalkyl.dll`. It then runs
-libFuzzer against `corpus/<target>/`. The corpus was made with `--write-corpus 16 --seed 1` and
-can be made again the same way. libFuzzer mode has not been run yet, because
-`libfuzzer-dotnet.exe` was not on the machine the harness was built on.
+libFuzzer with `corpus/<target>/` as seeds. The inputs libFuzzer finds interesting go to
+`corpus-work/<target>/`, which is not under version control, so the seeds stay small. The seeds
+were made with `--write-corpus 16 --seed 1` and can be made again the same way.
+
+`fuzz-night.ps1` splits the time by weight: the package targets get the most, and
+`attribute-sweep` is left out, because under libFuzzer it runs the harness of `xlsx-part`. It
+writes a log to `findings/night-<date>.log` and ends with `corpus-check.ps1`.
+
+The first libFuzzer runs (2026-11-24, libfuzzer-dotnet v2025.05.02) found two bugs within a
+minute that 50,000 smoke inputs had missed:
+
+- **A defect in .NET 10's `System.Xml`.** `XmlTextReaderImpl` throws
+  `ArgumentOutOfRangeException` from `Buffer.BlockCopy` for one malformed XML declaration read
+  from a deflate stream. .NET 11 gives `XmlException`. `DepthLimitedXmlReader` now reports it as
+  broken XML. Note that a file-based app (`dotnet run probe.cs`) runs on the newest runtime
+  installed, not on .NET 10, so a probe of this kind must say `#:property TargetFramework=net10.0`.
+- **`<sheet>` outside `<sheets>`.** A mutated `<sheetz>` still gave its sheets to the reader,
+  and the saver wrote them twice. Sheets and names are now read only from their own sections.
+
+After the fixes, three minutes each with 4 workers (about 610,000 inputs for `xlsx-part` and
+2 million for `zip-raw`) gave nothing.
 
 ## Adding a target
 

@@ -18,6 +18,9 @@ $project = Join-Path $scriptDir "Avig.Kalkyl.Fuzz.csproj"
 $publishDir = Join-Path $scriptDir "bin\fuzz-publish"
 $corpusDir = Join-Path $scriptDir "corpus\$Target"
 $findingsDir = Join-Path $scriptDir "findings\$Target"
+# libFuzzer writes the inputs it finds interesting to the first corpus folder. That is a local
+# folder, so a night's run does not add thousands of files to the committed seeds in corpus/.
+$workDir = Join-Path $scriptDir "corpus-work\$Target"
 
 Write-Host ""
 Write-Host "=== Avig.Kalkyl.Fuzz: $Target ===" -ForegroundColor Cyan
@@ -72,6 +75,8 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 Write-Host "[3/3] Running libFuzzer for $RuntimeSeconds s with $Workers worker(s)..." -ForegroundColor Yellow
 if (-not (Test-Path $findingsDir)) { New-Item -Path $findingsDir -ItemType Directory | Out-Null }
 if (-not (Test-Path $corpusDir)) { New-Item -Path $corpusDir -ItemType Directory | Out-Null }
+if (-not (Test-Path $workDir)) { New-Item -Path $workDir -ItemType Directory | Out-Null }
+
 
 $arguments = @(
     "--target_path=$(Join-Path $publishDir 'Avig.Kalkyl.Fuzz.exe')",
@@ -86,7 +91,7 @@ if ($Workers -gt 1) {
     $arguments += "-jobs=$Workers"
 }
 
-& $libfuzzer @arguments $corpusDir
+& $libfuzzer @arguments $workDir $corpusDir
 $exitCode = $LASTEXITCODE
 
 Write-Host ""

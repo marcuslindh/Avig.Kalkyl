@@ -93,6 +93,9 @@ Alla brister i tabellen ovan är åtgärdade och har regressionstester i
 | Z-02, Z-07 | `xlsx-part` får djup nästling och text vid gränsen 32 767, verifierat genom sabotage. |
 | PRF-03 (P-11) | Öppning av 100 000 formler allokerar 1,1 GB i stället för 6,7 GB. En skrivare per blad och synkrona läsare för cellfragment. Omräkningen allokerar cirka 2 kB per formel. |
 | PRF-01 | `tools/Avig.Kalkyl.Benchmarks` med BenchmarkDotNet. Baslinjen finns i `docs/benchmarks/baseline.md`. |
+| SEC-10 (felkoder) | Se raden SEC-10 ovan. |
+| FUN-01, PRF-01 (hela kolumner) | Cellagringen och formelindexet är omgjorda. 10 000 löpande `SUMIF(B:B,…)` tar 2,7 s i stället för 20,4 s (`docs/benchmarks/baseline.md`). |
+| FUZ-01 (första körningen) | libFuzzer hittade två fel på en minut, som 50 000 smoke-indata hade missat. Det ena är ett fel i `System.Xml` i .NET 10, där en trasig XML-deklaration gav `ArgumentOutOfRangeException`. Det andra var `<sheet>` utanför `<sheets>`, som gav dubbla blad när filen sparades. Båda är rättade och har tester i `HostileFilesTests`. Efter rättningarna gav 2,6 miljoner indata inga fynd. |
 | DEP-01 | NuGet Audit (`all`, `low`) och låsfiler. Restore är låst i CI. |
 | FUZ-03 (Z-06) | Fuzzmålet `attribute-sweep` ger varje heltalsattribut i mallen vart och ett av 18 gränsvärden. |
 | 6.3 | `tools/Avig.Kalkyl.Fuzz/corpus-check.ps1` kör varje indata i en egen process med tidsgräns och 1 GiB heap. Det är verifierat att den fångar stackspill. |
@@ -100,13 +103,12 @@ Alla brister i tabellen ovan är åtgärdade och har regressionstester i
 Det som återstår kräver en miljö eller ett beslut:
 
 - **FUN-04:** öppna filer i riktiga Excel. Excel finns inte på byggmaskinen.
-- **FUZ-01:** täckningsstyrd fuzzning med libFuzzer. `libfuzzer-dotnet.exe` är inte installerat.
+- **FUZ-01:** libFuzzer är installerat och har körts i tre minuter per paketmål (se nedan). En hel natt med `tools/Avig.Kalkyl.Fuzz/fuzz-night.ps1` återstår.
 - **SEC-03 i full storlek, SEC-05, PRF-02 och P-07 till P-09:** de kräver en isolerad container
   och kör i timmar.
 - **FUZ-03 (Z-06):** svepet över heltalsattribut är inte byggt.
 - **6.3:** barnprocessen för korpusen är inte automatiserad.
 - **DEP-02:** licenskontroll och SBOM i CI. Repot har ingen CI än.
-- **Prestanda:** funktioner över hela kolumner kostar 200–280 ns per rad, så 10 000 löpande SUMIF tar 20 sekunder. Det kräver en annan lagring av cellerna (`docs/benchmarks/baseline.md`).
 
 ---
 
@@ -454,7 +456,7 @@ den testas kontrollerat, vad man ska observera och vilka skydd som ska finnas.
 
 **S-18 Buffer overflow och minnesfel [B]**
 - **Läget:** paketet är helt managed. Det har ingen `unsafe`-kod och inga P/Invoke-anrop (verifierat med `grep unsafe|DllImport|LibraryImport`). Det finns bara en `stackalloc` på 3 char i `CellAddress.ColumnName`. Zip och XML hanteras av BCL i .NET. Risken ligger i .NET-runtimen och patchas med runtime-uppdateringar.
-- **Test:** fuzzmålet `xlsx-part` körs täckningsstyrt med libFuzzer. **Det har inte körts än.**
+- **Test:** fuzzmålet `xlsx-part` körs täckningsstyrt med libFuzzer. Det har körts i tre minuter med 4 arbetare, och fynden är rättade. En hel natt återstår.
 
 **S-19 Heltalsspill [B]**
 - **Rättat:** `ValueArray` räknade storleken med `int` (60 000 × 60 000) och kontrollerar nu med `long`.
@@ -557,7 +559,7 @@ Det som återstår:
 | Z-07 | Extremt långa strängar | `roundtrip` testar högst 255 tecken. | 32 767, 32 768 och 1 000 000 tecken i `<t>`, `<f>`, `<v>`, bladnamn, `formatCode` och sökvägar i relationer. P05 hade hittats här. |
 | Z-08 | Nästlade och oväntade strukturer | Djup nästling av formler finns (`formula`). | Djup nästling av XML, se Z-02. |
 | Z-09 | Mutation av giltiga filer | Korpusen skapas av generatorn. | Använd de 38 kompatibilitetsfilerna, uppackade del för del, som startpunkt för libFuzzer. |
-| Z-10 | Täckningsstyrning | `fuzz.ps1` med libFuzzer. | **Har inte körts.** Installera `libfuzzer-dotnet.exe` och kör en natt per mål. Mät täckningen med `coverlet` på korpusen. |
+| Z-10 | Täckningsstyrning | `fuzz.ps1` och `fuzz-night.ps1` med libFuzzer. | Körd i några minuter per mål. Kör en hel natt, och mät täckningen med `coverlet` på korpusen. |
 
 Fuzzern har en grundregel: **varje nytt mål ska kunna hitta ett fel som läggs in med avsikt.**
 Det står i fuzz-README:n, med sabotage för alla mål. Gör samma sak för Z-03 till Z-08.
@@ -826,6 +828,9 @@ säkerhetsmiljö.
 | PRF-01 | Baslinjer P-01 till P-04 | Medel | A | BenchmarkDotNet på en dedikerad maskin | Kör och spara resultaten i `docs/benchmarks/`. | Baslinjer finns. | Försämring över 20 % i senare körning. | Profilera med `dotnet-trace`. |
 | PRF-02 | Långvarig belastning och läckor (P-06, P-07, P-10) | Låg | C | Container, `dotnet-counters`, `dotnet-gcdump` | 4 timmar och 10 000 iterationer. | Stabilt minne. | Minnet trendar uppåt, eller objekt blir kvar. | Analysera med gcdump. |
 | PRF-03 | Allokering per formel (P-11) | Låg | A | `dotnet-trace` | Profilera en kedja med 100 000 formler. | Under 5 kB per formel. | Över 20 kB per formel. | Optimera `Recalculator` och `Evaluator`. |
+| SEC-10 (felkoder) | Se raden SEC-10 ovan. |
+| FUN-01, PRF-01 (hela kolumner) | Cellagringen och formelindexet är omgjorda. 10 000 löpande `SUMIF(B:B,…)` tar 2,7 s i stället för 20,4 s (`docs/benchmarks/baseline.md`). |
+| FUZ-01 (första körningen) | libFuzzer hittade två fel på en minut, som 50 000 smoke-indata hade missat. Det ena är ett fel i `System.Xml` i .NET 10, där en trasig XML-deklaration gav `ArgumentOutOfRangeException`. Det andra var `<sheet>` utanför `<sheets>`, som gav dubbla blad när filen sparades. Båda är rättade och har tester i `HostileFilesTests`. Efter rättningarna gav 2,6 miljoner indata inga fynd. |
 | DEP-01 | NuGet Audit och lockfil | Låg | A | `Directory.Build.props` | Slå på Audit på nivån `low`, lägg till `packages.lock.json` och `RestoreLockedMode`. | Bygget är grönt. | En sårbarhet hittas. | Uppdatera beroendet, eller dokumentera undantaget. |
 | DEP-02 | Licenser och SBOM | Låg | A | `nuget-license`, CycloneDX | Kör i CI. | Bara tillåtna licenser. | En okänd licens eller copyleft-licens i paketet. | Byt beroende. |
 

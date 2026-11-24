@@ -26,6 +26,7 @@ Thumbs.db
 
 # Fuzzing: crash and slow inputs are local; a real finding becomes a regression test instead
 tools/Avig.Kalkyl.Fuzz/findings/
+tools/Avig.Kalkyl.Fuzz/corpus-work/
 
 # Compatibility tests: downloaded tutorial workbooks (not ours to redistribute) and reports
 tests/Avig.Kalkyl.Compatibility/files/
