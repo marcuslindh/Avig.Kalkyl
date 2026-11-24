@@ -10,8 +10,8 @@
       },
       "Avig.OpenXml": {
         "type": "Transitive",
-        "resolved": "0.1.1",
-        "contentHash": "EWo8+OMHMk1R9FydNF5Yinq3sx2uG478j1Y2jQo4e7SgWCj1aHZ63U95ScLJELqmRbu/MoMhmhg47hdDb++qgA==",
+        "resolved": "0.1.4",
+        "contentHash": "AVXabGVaoUcfhiZI2rUhko+aHxLwEswl1kap6OyPQpATeU0Eevi0fPjWaiGgOvS3BGRp1iZaQZPdEcQDDcbc6w==",
         "dependencies": {
           "Avig.Result": "1.0.2"
         }
@@ -24,10 +24,10 @@
       "avig.kalkyl": {
         "type": "Project",
         "dependencies": {
-          "Avig.OpenXml": "[0.1.1, )",
+          "Avig.OpenXml": "[0.1.4, )",
           "Avig.Result": "[1.0.2, )"
         }
       }
     }
   }
-}
+}
