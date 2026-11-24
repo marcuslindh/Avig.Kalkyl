@@ -24,7 +24,7 @@ internal static class CellText
         {
             char current = text[index];
 
-            if (current == '_' && LooksLikeEscape(text, index) == true)
+            if (current == '_' && WouldLookLikeEscape(text, index) == true)
             {
                 builder.Append("_x005F_");
 
@@ -76,7 +76,7 @@ internal static class CellText
     {
         for (int index = 0; index < text.Length; index++)
         {
-            if (IsAllowed(text, index) == false || (text[index] == '_' && LooksLikeEscape(text, index) == true))
+            if (IsAllowed(text, index) == false || (text[index] == '_' && WouldLookLikeEscape(text, index) == true))
             {
                 return true;
             }
@@ -89,6 +89,13 @@ internal static class CellText
     {
         char current = text[index];
 
+        // XML allows a carriage return but every XML reader turns it, and \r\n, into \n, so a
+        // \r written as itself comes back as something else. Excel writes it as _x000D_ too.
+        if (current == '\r')
+        {
+            return false;
+        }
+
         if (char.IsHighSurrogate(current) == true)
         {
             return index + 1 < text.Length && char.IsLowSurrogate(text[index + 1]) == true;
@@ -100,6 +107,35 @@ internal static class CellText
         }
 
         return XmlConvert.IsXmlChar(current);
+    }
+
+    /// <summary>
+    /// True when the '_' at <paramref name="index"/> would read as the start of an escape once the
+    /// text is encoded. Either it looks like one already, or it is followed by x and four hex
+    /// digits and then a character that gets encoded: that character's own escape starts with
+    /// the '_' that closes the first one, so _xc1e5 before a lone surrogate would come back as 쇥.
+    /// </summary>
+    private static bool WouldLookLikeEscape(string text, int index)
+    {
+        if (LooksLikeEscape(text, index) == true)
+        {
+            return true;
+        }
+
+        if (index + 6 >= text.Length || text[index + 1] != 'x' || IsAllowed(text, index + 6) == true)
+        {
+            return false;
+        }
+
+        for (int offset = 2; offset < 6; offset++)
+        {
+            if (char.IsAsciiHexDigit(text[index + offset]) == false)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool LooksLikeEscape(string text, int index)

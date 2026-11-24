@@ -120,8 +120,8 @@ internal static class MathFunctions
         table.Add("PRODUCT", 1, FunctionTable.Many, Product);
         table.Add("SUMSQ", 1, FunctionTable.Many, SumSquares);
         table.Add("SUMPRODUCT", 1, FunctionTable.Many, SumProduct);
-        table.Add("SUMIF", 2, 3, SumIf);
-        table.Add("SUMIFS", 3, FunctionTable.Many, SumIfs);
+        table.Add("SUMIF", 2, 3, StatisticalFunctionsAggregates.SumIf);
+        table.Add("SUMIFS", 3, FunctionTable.Many, StatisticalFunctionsAggregates.SumIfs);
         table.Add("SUMX2MY2", 2, 2, call => PairSum(call, (left, right) => (left * left) - (right * right)));
         table.Add("SUMX2PY2", 2, 2, call => PairSum(call, (left, right) => (left * left) + (right * right)));
         table.Add("SUMXMY2", 2, 2, call => PairSum(call, (left, right) => (left - right) * (left - right)));
@@ -850,134 +850,6 @@ internal static class MathFunctions
                 }
 
                 sum += product;
-            }
-        }
-
-        return Value.FromNumber(sum);
-    }
-
-    /// <summary>
-    /// SUMIF(range, criteria, [sum_range]): the sum range is read with the criteria range's shape,
-    /// starting at its own top-left cell, as Excel does. Only numbers are added.
-    /// </summary>
-    private static Value SumIf(FunctionCall call)
-    {
-        if (call.TryArray(0, out ValueArray tested, out Value error) == false)
-        {
-            return error;
-        }
-
-        Criteria criteria = Criteria.Parse(call.Scalar(1), call.Uses1904);
-        ValueArray summed = tested;
-
-        if (call.IsMissing(2) == false)
-        {
-            Value raw = call.Raw(2);
-
-            if (raw.IsError == true)
-            {
-                return raw;
-            }
-
-            if (raw.Kind == ValueKind.Reference)
-            {
-                RangeReference start = raw.Reference!;
-                int lastRow = Math.Min(start.FirstRow + Math.Max(tested.Rows, 1) - 1, CellAddress.MaxRows - 1);
-                int lastColumn = Math.Min(start.FirstColumn + Math.Max(tested.Columns, 1) - 1, CellAddress.MaxColumns - 1);
-                RangeReference aligned = new(start.Sheet, start.FirstRow, start.FirstColumn, lastRow, lastColumn);
-                summed = call.Evaluator.ToValueArray(Value.FromReference(aligned));
-            }
-            else
-            {
-                summed = call.Evaluator.ToValueArray(raw);
-
-                if (summed.Rows != tested.Rows || summed.Columns != tested.Columns)
-                {
-                    return Value.ValueError;
-                }
-            }
-        }
-
-        double sum = 0;
-
-        for (int row = 0; row < tested.Rows; row++)
-        {
-            for (int column = 0; column < tested.Columns; column++)
-            {
-                if (row >= summed.Rows || column >= summed.Columns || criteria.Matches(tested[row, column]) == false)
-                {
-                    continue;
-                }
-
-                Value item = summed[row, column];
-
-                if (item.IsError == true)
-                {
-                    return item;
-                }
-
-                if (item.Kind == ValueKind.Number)
-                {
-                    sum += item.Number;
-                }
-            }
-        }
-
-        return Value.FromNumber(sum);
-    }
-
-    /// <summary>SUMIFS(sum_range, range1, criteria1, …): every range must have the sum range's shape, or #VALUE!.</summary>
-    private static Value SumIfs(FunctionCall call)
-    {
-        if (call.Count % 2 == 0)
-        {
-            return Value.ValueError;
-        }
-
-        if (call.TryArray(0, out ValueArray summed, out Value error) == false)
-        {
-            return error;
-        }
-
-        List<(ValueArray Range, Criteria Test)> conditions = [];
-
-        for (int index = 1; index < call.Count; index += 2)
-        {
-            if (call.TryArray(index, out ValueArray range, out error) == false)
-            {
-                return error;
-            }
-
-            if (range.Rows != summed.Rows || range.Columns != summed.Columns)
-            {
-                return Value.ValueError;
-            }
-
-            conditions.Add((range, Criteria.Parse(call.Scalar(index + 1), call.Uses1904)));
-        }
-
-        double sum = 0;
-
-        for (int row = 0; row < summed.Rows; row++)
-        {
-            for (int column = 0; column < summed.Columns; column++)
-            {
-                if (conditions.All(condition => condition.Test.Matches(condition.Range[row, column]) == true) == false)
-                {
-                    continue;
-                }
-
-                Value item = summed[row, column];
-
-                if (item.IsError == true)
-                {
-                    return item;
-                }
-
-                if (item.Kind == ValueKind.Number)
-                {
-                    sum += item.Number;
-                }
             }
         }
 

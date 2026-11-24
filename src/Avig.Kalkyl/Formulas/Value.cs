@@ -163,16 +163,59 @@ internal sealed record RangeReference(Worksheet Sheet, int FirstRow, int FirstCo
     }
 }
 
+/// <summary>An array in a formula would hold more values than KalkylLimits.MaxArrayCells allows. The evaluator turns it into #NUM!.</summary>
+internal sealed class ArrayTooLargeException(long size, long limit)
+    : Exception($"An array of {size:N0} values is larger than the {limit:N0} KalkylLimits.MaxArrayCells allows.");
+
 /// <summary>A rectangular array of values, from an array constant, a range or a function.</summary>
 internal sealed class ValueArray
 {
+    /// <summary>
+    /// The most values an array may hold on this thread, set for the length of one evaluation
+    /// or recalculation (see <see cref="LimitTo"/>). Thread-static because arrays are made in
+    /// many functions that do not know the workbook, and one evaluation runs on one thread.
+    /// </summary>
+    [ThreadStatic]
+    private static long currentLimit;
+
     private readonly Value[] items;
 
     public ValueArray(int rows, int columns)
     {
+        // In long: 100 000 x 100 000 overflowed int, and new Value[negative] threw OverflowException.
+        long size = (long)rows * columns;
+        long limit = currentLimit;
+
+        if (limit == 0)
+        {
+            limit = KalkylLimits.Default.MaxArrayCells;
+        }
+
+        if (size > limit || size > Array.MaxLength)
+        {
+            throw new ArrayTooLargeException(size, limit);
+        }
+
         Rows = rows;
         Columns = columns;
-        items = new Value[rows * columns];
+        items = new Value[size];
+    }
+
+    /// <summary>Sets the array limit until the returned scope is disposed; the previous one comes back then.</summary>
+    public static IDisposable LimitTo(long limit)
+    {
+        long previous = currentLimit;
+        currentLimit = limit;
+
+        return new LimitScope(previous);
+    }
+
+    private sealed class LimitScope(long previous) : IDisposable
+    {
+        public void Dispose()
+        {
+            currentLimit = previous;
+        }
     }
 
     public int Rows { get; }

@@ -32,9 +32,25 @@ internal sealed record MissingNode : Node;
 /// </summary>
 internal sealed class FormulaParser
 {
+    /// <summary>Excel's limit on the length of a formula, not counting the leading '='.</summary>
+    private const int MaxFormulaLength = 8192;
+
+    /// <summary>Excel's limit on functions inside functions.</summary>
+    private const int MaxFunctionNesting = 64;
+
+    /// <summary>
+    /// Parentheses, signs and functions inside each other, together. The parser and the
+    /// evaluator go one level deeper on the stack for each, and a stack overflow ends the
+    /// process instead of failing the formula: a thousand '(' did that. This is well below
+    /// what the stack holds and well above what a workbook uses.
+    /// </summary>
+    private const int MaxNesting = 255;
+
     private readonly List<Token> tokens;
     private readonly string formula;
     private int position;
+    private int nesting;
+    private int functionNesting;
 
     private FormulaParser(List<Token> tokens, string formula)
     {
@@ -44,6 +60,11 @@ internal sealed class FormulaParser
 
     public static Result<Node> Parse(string formula)
     {
+        if (formula.Length > MaxFormulaLength + 1)
+        {
+            return Result<Node>.Invalid($"The formula is {formula.Length:N0} characters long; Excel allows {MaxFormulaLength:N0}, and so does this.");
+        }
+
         Result<List<Token>> tokenized = FormulaLexer.Tokenize(formula);
 
         if (tokenized.IsSuccess(out List<Token>? tokens) == false)
@@ -155,11 +176,34 @@ internal sealed class FormulaParser
         if (IsOperator("-") == true || IsOperator("+") == true)
         {
             string op = Next().Text;
+            Enter();
+            Node operand = ParseUnary();
+            nesting--;
 
-            return new UnaryNode(op, ParseUnary());
+            return new UnaryNode(op, operand);
         }
 
         return ParseRange();
+    }
+
+    private void Enter()
+    {
+        nesting++;
+
+        if (nesting > MaxNesting)
+        {
+            throw new FormatException($"'{Shorten(formula)}' nests parentheses, signs and functions more than {MaxNesting} levels deep.");
+        }
+    }
+
+    private static string Shorten(string text)
+    {
+        if (text.Length <= 60)
+        {
+            return text;
+        }
+
+        return text[..60] + "...";
     }
 
     private Node ParseRange()
@@ -204,11 +248,25 @@ internal sealed class FormulaParser
                 return new LiteralNode(Value.Ref);
 
             case TokenKind.Function:
-                return ParseFunction(token);
+                Enter();
+                functionNesting++;
+
+                if (functionNesting > MaxFunctionNesting)
+                {
+                    throw new FormatException($"'{Shorten(formula)}' has more than {MaxFunctionNesting} levels of functions inside functions, which Excel does not allow either.");
+                }
+
+                FunctionNode function = ParseFunction(token);
+                functionNesting--;
+                nesting--;
+
+                return function;
 
             case TokenKind.OpenParen:
+                Enter();
                 Node inner = ParseComparison();
                 Expect(TokenKind.CloseParen, ")");
+                nesting--;
 
                 return inner;
 

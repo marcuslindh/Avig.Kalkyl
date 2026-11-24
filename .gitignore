@@ -23,3 +23,14 @@ Thumbs.db
 
 # Local AI code review state, not project content
 .aicodereview/
+
+# Fuzzing: crash and slow inputs are local; a real finding becomes a regression test instead
+tools/Avig.Kalkyl.Fuzz/findings/
+tools/Avig.Kalkyl.Fuzz/corpus-work/
+
+# Compatibility tests: downloaded tutorial workbooks (not ours to redistribute) and reports
+tests/Avig.Kalkyl.Compatibility/files/
+tests/Avig.Kalkyl.Compatibility/report/
+
+# Benchmark results are machine-specific; the baseline is written up in docs/benchmarks/
+BenchmarkDotNet.Artifacts/

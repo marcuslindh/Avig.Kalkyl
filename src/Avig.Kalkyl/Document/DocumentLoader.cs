@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using Avig.Kalkyl.Internal;
@@ -13,10 +14,31 @@ namespace Avig.Kalkyl.Document;
 /// shared formula are the exception: they get their own formula text and are written out
 /// explicitly, so that editing the first cell of the group cannot break the others.
 /// </summary>
+/// <summary>
+/// Counts the cells loaded into the document model across all sheets and stops at
+/// KalkylLimits.MaxCells, before the cells fill memory rather than after.
+/// </summary>
+internal sealed class CellBudget(long limit)
+{
+    private long used;
+
+    public void Take()
+    {
+        used++;
+
+        if (used > limit)
+        {
+            throw new InvalidDataException($"The workbook has more than {limit:N0} cells, the limit set in KalkylLimits.MaxCells. If it is a file you trust, open it with larger limits, or read it with XlsxReader, which holds one row at a time.");
+        }
+    }
+}
+
 internal static class DocumentLoader
 {
     public static async Task<Result> LoadAsync(Workbook book, XlsxReader reader, CancellationToken cancellationToken)
     {
+        CellBudget budget = new(book.Limits.MaxCells);
+
         foreach (SheetPart part in reader.SheetParts)
         {
             if (XmlParts.TryFindEntry(reader.Archive, part.Path, out ZipArchiveEntry? entry) == false)
@@ -26,7 +48,7 @@ internal static class DocumentLoader
 
             try
             {
-                Worksheet sheet = await LoadSheetAsync(book, part, entry, reader, cancellationToken);
+                Worksheet sheet = await LoadSheetAsync(book, part, entry, reader, budget, cancellationToken);
                 book.AddLoadedSheet(sheet);
             }
             catch (XmlException exception)
@@ -35,7 +57,7 @@ internal static class DocumentLoader
             }
             catch (InvalidDataException exception)
             {
-                return Result.Invalid(exception.Message);
+                return Result.Invalid(KalkylError.Describe(exception));
             }
         }
 
@@ -48,10 +70,41 @@ internal static class DocumentLoader
             return Result.Invalid($"The file is damaged: the workbook part has broken XML ({exception.Message}).");
         }
 
+        try
+        {
+            await CheckWellFormedAsync(reader.Archive, "[Content_Types].xml", cancellationToken);
+        }
+        catch (XmlException exception)
+        {
+            return Result.Invalid($"The file is damaged: [Content_Types].xml has broken XML ({exception.Message}).");
+        }
+
         // Loading is not a change; the formula engine starts from a clean slate.
         book.ChangedCells.Clear();
 
         return Result.Success();
+    }
+
+    /// <summary>
+    /// Reads a part through once without keeping anything. The model does not need the content
+    /// types, but saving rewrites them, and a broken part has to be reported when the file is
+    /// opened rather than thrown when it is saved.
+    /// </summary>
+    private static async Task CheckWellFormedAsync(ZipArchive archive, string path, CancellationToken cancellationToken)
+    {
+        if (XmlParts.TryFindEntry(archive, path, out ZipArchiveEntry? entry) == false)
+        {
+            return;
+        }
+
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader xml = XmlParts.CreateReader(stream);
+        bool more = await xml.ReadAsync();
+
+        while (more == true)
+        {
+            more = await xml.ReadAsync();
+        }
     }
 
     /// <summary>The defined names, which the formula engine resolves. The file keeps its own copy, which is saved as it was.</summary>
@@ -62,12 +115,20 @@ internal static class DocumentLoader
             return;
         }
 
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader xml = XmlReader.Create(stream, XmlParts.Settings);
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader xml = XmlParts.CreateReader(stream);
+
+        // Only the names in <definedNames>, the element the saver copies them from (see ReadWorkbookAsync).
+        string section = string.Empty;
 
         while (xml.EOF == false)
         {
-            if (XmlParts.IsElement(xml, "definedName") == false)
+            if (xml.NodeType == XmlNodeType.Element && xml.Depth == 1)
+            {
+                section = xml.LocalName;
+            }
+
+            if (section != "definedNames" || xml.Depth != 2 || XmlParts.IsElement(xml, "definedName") == false)
             {
                 await xml.ReadAsync();
 
@@ -91,10 +152,10 @@ internal static class DocumentLoader
         }
     }
 
-    private static async Task<Worksheet> LoadSheetAsync(Workbook book, SheetPart part, ZipArchiveEntry entry, XlsxReader reader, CancellationToken cancellationToken)
+    private static async Task<Worksheet> LoadSheetAsync(Workbook book, SheetPart part, ZipArchiveEntry entry, XlsxReader reader, CellBudget budget, CancellationToken cancellationToken)
     {
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader xml = XmlReader.Create(stream, XmlParts.Settings);
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader xml = XmlParts.CreateReader(stream);
         await xml.MoveToContentAsync();
         string sheetNamespace = xml.NamespaceURI;
         XmlNamespaceManager namespaces = new(new NameTable());
@@ -156,7 +217,7 @@ internal static class DocumentLoader
                     break;
 
                 case "sheetData":
-                    await ReadSheetDataAsync(xml, context, fragmentContext, cells, rowAttributes, cancellationToken);
+                    await ReadSheetDataAsync(xml, context, fragmentContext, cells, rowAttributes, budget, cancellationToken);
 
                     break;
 
@@ -189,6 +250,7 @@ internal static class DocumentLoader
         XmlParserContext fragmentContext,
         List<(int Row, int Column, CellEntry Entry)> cells,
         List<(int Row, IReadOnlyList<(string, string, string, string)> Attributes)> rowAttributes,
+        CellBudget budget,
         CancellationToken cancellationToken)
     {
         if (xml.IsEmptyElement == true)
@@ -202,6 +264,16 @@ internal static class DocumentLoader
         int previousRow = -1;
         XmlReaderSettings fragmentSettings = XmlParts.Settings.Clone();
         fragmentSettings.ConformanceLevel = ConformanceLevel.Fragment;
+        fragmentSettings.Async = false;
+
+        // One writer for the sheet copies each cell's XML into one buffer. ReadOuterXml made a
+        // new writer and string writer for every cell, which with the reader for the fragment
+        // came to 67 kB of allocations per cell: 6.7 GB to open 100 000 formulas.
+        StringBuilder rawText = new();
+        await using StringWriter rawWriter = new(rawText, CultureInfo.InvariantCulture);
+        XmlWriterSettings rawSettings = new() { ConformanceLevel = ConformanceLevel.Fragment, Async = true, NewLineHandling = NewLineHandling.None };
+
+        await using XmlWriter copier = XmlWriter.Create(rawWriter, rawSettings);
         await xml.ReadAsync();
 
         while (XmlParts.IsEnd(xml, depth) == false)
@@ -214,12 +286,7 @@ internal static class DocumentLoader
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            int rowIndex = previousRow + 1;
-
-            if (int.TryParse(xml.GetAttribute("r"), NumberStyles.None, CultureInfo.InvariantCulture, out int rowNumber) == true && rowNumber > 0)
-            {
-                rowIndex = rowNumber - 1;
-            }
+            int rowIndex = CellXml.RowIndex(xml, previousRow, context);
 
             previousRow = rowIndex;
             rowAttributes.Add((rowIndex, ReadRowAttributes(xml)));
@@ -244,8 +311,11 @@ internal static class DocumentLoader
                     continue;
                 }
 
-                string raw = await xml.ReadOuterXmlAsync();
-                using XmlReader fragment = XmlReader.Create(new StringReader(raw), fragmentSettings, fragmentContext);
+                rawText.Clear();
+                await copier.WriteNodeAsync(xml, true);
+                await copier.FlushAsync();
+                string raw = rawText.ToString();
+                using XmlReader fragment = XmlParts.CreateReader(new StringReader(raw), fragmentSettings, fragmentContext);
                 await fragment.MoveToContentAsync();
                 ParsedCell parsed = await CellXml.ReadCellAsync(fragment, rowIndex, previousColumn, context);
                 previousColumn = parsed.Column;
@@ -256,6 +326,7 @@ internal static class DocumentLoader
                     kept = null;
                 }
 
+                budget.Take();
                 cells.Add((rowIndex, parsed.Column, new CellEntry(parsed.Cell, kept, parsed.StyleIndex, true)));
             }
 

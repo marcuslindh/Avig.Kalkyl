@@ -25,8 +25,8 @@
     <PackageId>Avig.Kalkyl</PackageId>
     <Version>0.1.0</Version>
     <Title>Avig.Kalkyl</Title>
-    <Description>Read and write Excel .xlsx files: streaming rows, cell values as a typed union with a Try pattern, fluent styles that are deduplicated for you, and automatic date detection. Failures come back as Avig.Result values. No dependencies besides Avig.Result; trimming and Native AOT safe.</Description>
-    <PackageTags>excel;xlsx;spreadsheet;openxml;streaming</PackageTags>
+    <Description>Read and write Excel .xlsx files: streaming rows, cell values as a typed union with a Try pattern, fluent styles that are deduplicated for you, automatic date detection, and charts, pictures and conditional formatting. Failures come back as Avig.Result values. No dependencies besides Avig.Result; trimming and Native AOT safe.</Description>
+    <PackageTags>excel;xlsx;spreadsheet;openxml;streaming;charts;conditional-formatting</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
@@ -41,6 +41,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Avig.Kalkyl.Tests" />
+    <!-- The fuzz harness tests the internal conversions (CellText, ExcelDate, FormulaShifter) directly. -->
+    <InternalsVisibleTo Include="Avig.Kalkyl.Fuzz" />
   </ItemGroup>
 
   <ItemGroup>

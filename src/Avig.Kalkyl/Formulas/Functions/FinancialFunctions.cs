@@ -463,7 +463,7 @@ internal static class FinancialFunctions
                 return false;
             }
 
-            Value converted = Coerce.ToNumber(item, call.Uses1904);
+            Value converted = Coerce.ToNumber(item, call.Conversion);
 
             if (converted.IsError == true)
             {
@@ -885,7 +885,7 @@ internal static class FinancialFunctions
                 return Value.ValueError;
             }
 
-            Value converted = Coerce.ToNumber(item, call.Uses1904);
+            Value converted = Coerce.ToNumber(item, call.Conversion);
 
             if (converted.IsError == true)
             {

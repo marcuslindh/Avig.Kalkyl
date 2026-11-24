@@ -85,7 +85,7 @@ internal static class StatisticalFunctionsAggregates
 
             if (call.IsRangeOrArray(index) == true)
             {
-                foreach (Value item in call.Values(index))
+                foreach (Value item in call.NonBlankValues(index))
                 {
                     if (item.Kind == ValueKind.Number)
                     {
@@ -98,7 +98,7 @@ internal static class StatisticalFunctionsAggregates
 
             Value scalar = call.Scalar(index);
 
-            if (scalar.IsBlank == false && scalar.IsError == false && Coerce.ToNumber(scalar, call.Uses1904).IsError == false)
+            if (scalar.IsBlank == false && scalar.IsError == false && Coerce.ToNumber(scalar, call.Conversion).IsError == false)
             {
                 count++;
             }
@@ -121,7 +121,7 @@ internal static class StatisticalFunctionsAggregates
 
             if (call.IsRangeOrArray(index) == true)
             {
-                foreach (Value item in call.Values(index))
+                foreach (Value item in call.NonBlankValues(index))
                 {
                     if (item.IsBlank == false)
                     {
@@ -146,10 +146,28 @@ internal static class StatisticalFunctionsAggregates
             return error;
         }
 
+        // A mostly empty range: count what is filled and take it from the size.
+        if (grid.IsSparse(grid.UsedRows, grid.UsedColumns) == true)
+        {
+            long filled = 0;
+
+            foreach ((_, _, Value item) in grid.StoredValues(grid.UsedRows, grid.UsedColumns))
+            {
+                if (item.IsBlank == false && (item.Kind != ValueKind.Text || item.Text!.Length > 0))
+                {
+                    filled++;
+                }
+            }
+
+            return Value.FromNumber(grid.CellCount - filled);
+        }
+
         long count = grid.CellCount - ((long)grid.UsedRows * grid.UsedColumns);
 
         for (int row = 0; row < grid.UsedRows; row++)
         {
+            grid.CancellationToken.ThrowIfCancellationRequested();
+
             for (int column = 0; column < grid.UsedColumns; column++)
             {
                 Value item = grid.Get(row, column);
@@ -166,6 +184,35 @@ internal static class StatisticalFunctionsAggregates
 
     private static Value CountIfs(FunctionCall call)
     {
+        // COUNTIF(range, A5:A11) counts once for each criterion and gives an array of counts.
+        // That is how SUMPRODUCT(1/COUNTIF(A5:A11,A5:A11)) counts distinct values.
+        if (call.Count == 2 && call.IsRangeOrArray(1) == true)
+        {
+            if (call.TryArray(1, out ValueArray criteria, out Value arrayError) == false)
+            {
+                return arrayError;
+            }
+
+            ValueArray counts = new(criteria.Rows, criteria.Columns);
+
+            for (int row = 0; row < criteria.Rows; row++)
+            {
+                for (int column = 0; column < criteria.Columns; column++)
+                {
+                    if (TryMatch(call, 0, 2, null, out _, out long each, out Value eachError, criteria[row, column]) == false)
+                    {
+                        counts[row, column] = eachError;
+
+                        continue;
+                    }
+
+                    counts[row, column] = Value.FromNumber(each);
+                }
+            }
+
+            return Value.FromArray(counts);
+        }
+
         if (TryMatch(call, 0, call.Count, null, out _, out long count, out Value error) == false)
         {
             return error;
@@ -176,6 +223,26 @@ internal static class StatisticalFunctionsAggregates
 
     /// <summary>AVERAGEIF(range, criteria, [average_range]): average_range is read from its top-left cell with the size of range.</summary>
     private static Value AverageIf(FunctionCall call)
+    {
+        return SingleCondition(call, Average);
+    }
+
+    /// <summary>
+    /// SUMIF(range, criteria, [sum_range]), with the same walk as AVERAGEIF: a whole column with
+    /// one value far away is read from the cells that are there, not cell by cell.
+    /// </summary>
+    internal static Value SumIf(FunctionCall call)
+    {
+        return SingleCondition(call, numbers => Value.FromNumber(numbers.Sum()));
+    }
+
+    /// <summary>SUMIFS(sum_range, range1, criteria1, …), with the walk of AVERAGEIFS.</summary>
+    internal static Value SumIfs(FunctionCall call)
+    {
+        return ConditionalTarget(call, numbers => Value.FromNumber(numbers.Sum()));
+    }
+
+    private static Value SingleCondition(FunctionCall call, Func<List<double>, Value> aggregate)
     {
         if (StatisticalFunctionsGrid.TryCreate(call, 0, out StatisticalFunctionsGrid range, out Value error) == false)
         {
@@ -204,7 +271,7 @@ internal static class StatisticalFunctionsAggregates
             return error;
         }
 
-        return Average(numbers);
+        return aggregate(numbers);
     }
 
     /// <summary>AVERAGEIFS, MAXIFS, MINIFS: the target range first, then range/criteria pairs of the same shape.</summary>
@@ -256,7 +323,7 @@ internal static class StatisticalFunctionsAggregates
     /// have the shape of the first (and of <paramref name="target"/>), otherwise #VALUE!.
     /// Gives the target's values where every criterion holds, and the number of such cells.
     /// </summary>
-    private static bool TryMatch(FunctionCall call, int first, int end, StatisticalFunctionsGrid? target, out List<Value> matched, out long count, out Value error)
+    private static bool TryMatch(FunctionCall call, int first, int end, StatisticalFunctionsGrid? target, out List<Value> matched, out long count, out Value error, Value? onlyCriterion = null)
     {
         matched = [];
         count = 0;
@@ -287,7 +354,7 @@ internal static class StatisticalFunctionsAggregates
             }
 
             ranges.Add(range);
-            criteria.Add(Criteria.Parse(call.Scalar(index + 1), call.Uses1904));
+            criteria.Add(Criteria.Parse(onlyCriterion ?? call.Scalar(index + 1), call.Conversion));
         }
 
         StatisticalFunctionsGrid shape = ranges[0];
@@ -309,8 +376,49 @@ internal static class StatisticalFunctionsAggregates
         usedRows = Math.Min(usedRows, shape.Rows);
         usedColumns = Math.Min(usedColumns, shape.Columns);
 
+        // When the first criterion cannot match a blank, only the filled cells of the first range
+        // can match, and a large, mostly empty range is read from those alone.
+        if (criteria[0].Matches(Value.Blank) == false && ranges[0].IsSparse(usedRows, usedColumns) == true)
+        {
+            foreach ((int row, int column, Value leading) in ranges[0].StoredValues(usedRows, usedColumns))
+            {
+                if (criteria[0].Matches(leading) == true && MatchesAll(ranges, criteria, row, column, 1) == true)
+                {
+                    count++;
+
+                    if (target is not null)
+                    {
+                        matched.Add(target.Get(row, column));
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        // COUNTIF(range, "") on a mostly empty range: every position matches but the filled
+        // cells that do not, so count those and take them from the size.
+        if (ranges.Count == 1 && target is null && ranges[0].IsSparse(usedRows, usedColumns) == true)
+        {
+            long misses = 0;
+
+            foreach ((_, _, Value leading) in ranges[0].StoredValues(usedRows, usedColumns))
+            {
+                if (criteria[0].Matches(leading) == false)
+                {
+                    misses++;
+                }
+            }
+
+            count = shape.CellCount - misses;
+
+            return true;
+        }
+
         for (int row = 0; row < usedRows; row++)
         {
+            shape.CancellationToken.ThrowIfCancellationRequested();
+
             for (int column = 0; column < usedColumns; column++)
             {
                 if (MatchesAll(ranges, criteria, row, column) == false)
@@ -336,9 +444,9 @@ internal static class StatisticalFunctionsAggregates
         return true;
     }
 
-    private static bool MatchesAll(List<StatisticalFunctionsGrid> ranges, List<Criteria> criteria, int row, int column)
+    private static bool MatchesAll(List<StatisticalFunctionsGrid> ranges, List<Criteria> criteria, int row, int column, int first = 0)
     {
-        for (int index = 0; index < ranges.Count; index++)
+        for (int index = first; index < ranges.Count; index++)
         {
             if (criteria[index].Matches(ranges[index].Get(row, column)) == false)
             {

@@ -133,6 +133,8 @@ internal sealed record Token(TokenKind Kind, string Text, int Start)
 /// </summary>
 internal static class FormulaLexer
 {
+    private const string RefError = "#REF!";
+
     private static readonly string[] ErrorLiterals = ["#GETTING_DATA", "#DIV/0!", "#VALUE!", "#NULL!", "#NAME?", "#SPILL!", "#CALC!", "#REF!", "#NUM!", "#N/A"];
 
     public static string QuoteSheet(string sheet)
@@ -442,6 +444,13 @@ internal static class FormulaLexer
 
         int referenceStart = index + 2;
 
+        if (IsRefError(formula, referenceStart) == true)
+        {
+            tokens.Add(new Token(TokenKind.Error, "#REF!", position));
+
+            return referenceStart + RefError.Length;
+        }
+
         if (TryReadReference(formula, referenceStart, sheet.ToString(), out ReferenceToken? reference, out int after) == false)
         {
             return Result<int>.Invalid($"'{formula}' has no valid reference after the sheet name '{sheet}'.");
@@ -450,6 +459,17 @@ internal static class FormulaLexer
         tokens.Add(new Token(TokenKind.Reference, formula[position..after], position) { Reference = reference });
 
         return after;
+    }
+
+    /// <summary>
+    /// True when <c>#REF!</c> starts at <paramref name="position"/>. Excel writes a reference
+    /// whose cells were deleted as <c>Sheet!#REF!</c>, and moving a formula off the sheet does
+    /// the same, so it reads as the error rather than as a broken formula.
+    /// </summary>
+    private static bool IsRefError(string formula, int position)
+    {
+        return position + RefError.Length <= formula.Length
+            && string.Compare(formula, position, RefError, 0, RefError.Length, StringComparison.OrdinalIgnoreCase) == 0;
     }
 
     private static Result<int> ReadWord(string formula, int position, List<Token> tokens)
@@ -465,6 +485,13 @@ internal static class FormulaLexer
 
         if (index < formula.Length && formula[index] == '!')
         {
+            if (IsRefError(formula, index + 1) == true)
+            {
+                tokens.Add(new Token(TokenKind.Error, "#REF!", position));
+
+                return index + 1 + RefError.Length;
+            }
+
             if (TryReadReference(formula, index + 1, word, out ReferenceToken? sheetReference, out int afterSheet) == false)
             {
                 return Result<int>.Invalid($"'{formula}' has no valid reference after the sheet name '{word}'.");

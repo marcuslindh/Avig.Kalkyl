@@ -441,9 +441,16 @@ internal static class TextFunctions
             return error;
         }
 
-        if (count < 0 || text.Length * count > MaxLength)
+        // Divided rather than multiplied: text.Length * count overflows for a count near long.MaxValue.
+        if (count < 0 || (text.Length > 0 && count > MaxLength / text.Length))
         {
             return Value.ValueError;
+        }
+
+        // Empty text repeated any number of times is empty, and a count past int.MaxValue must not reach the cast below.
+        if (text.Length == 0)
+        {
+            return Value.FromText(string.Empty);
         }
 
         StringBuilder builder = new();
@@ -485,7 +492,7 @@ internal static class TextFunctions
                 return Value.FromText(value.ToString());
 
             default:
-                if (Coerce.TryParseNumber(value.Text!, call.Uses1904, out number) == false)
+                if (Coerce.TryParseNumber(value.Text!, call.Conversion, out number) == false)
                 {
                     return Result(TextFormat.FormatText(value.Text!, format));
                 }
@@ -515,7 +522,7 @@ internal static class TextFunctions
             case ValueKind.Blank:
                 return Value.FromNumber(0);
 
-            case ValueKind.Text when Coerce.TryParseNumber(value.Text!, call.Uses1904, out double number) == true:
+            case ValueKind.Text when Coerce.TryParseNumber(value.Text!, call.Conversion, out double number) == true:
                 return Value.FromNumber(number);
 
             default:

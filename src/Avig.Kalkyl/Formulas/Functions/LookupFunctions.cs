@@ -503,6 +503,11 @@ internal static class LookupFunctions
     /// <summary>CHOOSE(index, value1, …): the chosen argument as it is, so a reference stays a reference.</summary>
     private static Value Choose(FunctionCall call)
     {
+        if (call.IsRangeOrArray(0) == true)
+        {
+            return ChooseEach(call);
+        }
+
         if (call.TryInteger(0, out long index, out Value error) == false)
         {
             return error;
@@ -514,6 +519,103 @@ internal static class LookupFunctions
         }
 
         return call.Raw((int)index);
+    }
+
+    /// <summary>
+    /// CHOOSE({1,2}, B2:B9, A2:A9): one choice per index, put together into one array, with a
+    /// single row or column stretched to fit as in other array arithmetic. This is the usual way
+    /// to make VLOOKUP look to the left: the columns come out in the order the indexes give.
+    /// </summary>
+    private static Value ChooseEach(FunctionCall call)
+    {
+        if (call.TryArray(0, out ValueArray indexes, out Value error) == false)
+        {
+            return error;
+        }
+
+        Dictionary<int, ValueArray> chosen = [];
+        int rows = indexes.Rows;
+        int columns = indexes.Columns;
+
+        foreach (Value item in indexes.All())
+        {
+            Value number = Coerce.ToNumber(item, call.Conversion);
+
+            if (number.IsError == true)
+            {
+                return number;
+            }
+
+            int index = (int)Math.Truncate(number.Number);
+
+            if (index < 1 || index >= call.Count)
+            {
+                return Value.ValueError;
+            }
+
+            if (chosen.ContainsKey(index) == false)
+            {
+                if (call.TryArray(index, out ValueArray values, out error) == false)
+                {
+                    return error;
+                }
+
+                chosen[index] = values;
+                rows = Math.Max(rows, values.Rows);
+                columns = Math.Max(columns, values.Columns);
+            }
+        }
+
+        ValueArray result = new(rows, columns);
+
+        for (int row = 0; row < rows; row++)
+        {
+            for (int column = 0; column < columns; column++)
+            {
+                result[row, column] = Value.NA;
+
+                if (TryStretched(indexes, row, column, out Value item) == false)
+                {
+                    continue;
+                }
+
+                int index = (int)Math.Truncate(Coerce.ToNumber(item, call.Conversion).Number);
+
+                if (TryStretched(chosen[index], row, column, out Value value) == true)
+                {
+                    result[row, column] = value;
+                }
+            }
+        }
+
+        return Value.FromArray(result);
+    }
+
+    /// <summary>The item at (row, column) of an array with a single row or column stretched to the full size. False outside it, which Excel shows as #N/A.</summary>
+    private static bool TryStretched(ValueArray array, int row, int column, out Value value)
+    {
+        int sourceRow = row;
+        int sourceColumn = column;
+        value = Value.Blank;
+
+        if (array.Rows == 1)
+        {
+            sourceRow = 0;
+        }
+
+        if (array.Columns == 1)
+        {
+            sourceColumn = 0;
+        }
+
+        if (sourceRow >= array.Rows || sourceColumn >= array.Columns)
+        {
+            return false;
+        }
+
+        value = array[sourceRow, sourceColumn];
+
+        return true;
     }
 
     private static Value Size(FunctionCall call, bool rows)

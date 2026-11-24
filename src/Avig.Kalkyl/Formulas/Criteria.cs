@@ -15,26 +15,28 @@ internal sealed class Criteria
     private readonly string op;
     private readonly Value operand;
     private readonly Regex? pattern;
+    private readonly TextConversion conversion;
 
-    private Criteria(string op, Value operand, Regex? pattern)
+    private Criteria(string op, Value operand, Regex? pattern, TextConversion conversion)
     {
         this.op = op;
         this.operand = operand;
         this.pattern = pattern;
+        this.conversion = conversion;
     }
 
-    public static Criteria Parse(Value criterion, bool uses1904)
+    public static Criteria Parse(Value criterion, TextConversion conversion)
     {
         switch (criterion.Kind)
         {
             case ValueKind.Number:
             case ValueKind.Bool:
             case ValueKind.Error:
-                return new Criteria("=", criterion, null);
+                return new Criteria("=", criterion, null, conversion);
 
             case ValueKind.Blank:
                 // A criterion that points to an empty cell is read as 0, as in Excel.
-                return new Criteria("=", Value.FromNumber(0), null);
+                return new Criteria("=", Value.FromNumber(0), null, conversion);
         }
 
         string text = criterion.Text ?? string.Empty;
@@ -51,19 +53,19 @@ internal sealed class Criteria
             }
         }
 
-        if (Coerce.TryParseNumber(text, uses1904, out double number) == true)
+        if (Coerce.TryParseNumber(text, conversion, out double number) == true)
         {
-            return new Criteria(prefix, Value.FromNumber(number), null);
+            return new Criteria(prefix, Value.FromNumber(number), null, conversion);
         }
 
         if (string.Equals(text, "TRUE", StringComparison.OrdinalIgnoreCase) == true || string.Equals(text, "FALSE", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return new Criteria(prefix, Value.FromBool(string.Equals(text, "TRUE", StringComparison.OrdinalIgnoreCase)), null);
+            return new Criteria(prefix, Value.FromBool(string.Equals(text, "TRUE", StringComparison.OrdinalIgnoreCase)), null, conversion);
         }
 
         if (IsKnownError(text.ToUpperInvariant()) == true)
         {
-            return new Criteria(prefix, Value.Error(text.ToUpperInvariant()), null);
+            return new Criteria(prefix, Value.Error(text.ToUpperInvariant()), null, conversion);
         }
 
         Regex? regex = null;
@@ -73,7 +75,7 @@ internal sealed class Criteria
             regex = new Regex("^" + WildcardToRegex(text) + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline, TimeSpan.FromSeconds(1));
         }
 
-        return new Criteria(prefix, Value.FromText(text), regex);
+        return new Criteria(prefix, Value.FromText(text), regex, conversion);
     }
 
     /// <summary>Whether a cell's value meets the criterion.</summary>
@@ -139,7 +141,7 @@ internal sealed class Criteria
                 }
 
                 // A number criterion also matches text that reads as the same number.
-                return value.Kind == ValueKind.Text && Coerce.TryParseNumber(value.Text!, false, out double parsed) == true && parsed == operand.Number;
+                return value.Kind == ValueKind.Text && Coerce.TryParseNumber(value.Text!, conversion, out double parsed) == true && parsed == operand.Number;
 
             case ValueKind.Bool:
                 return value.Kind == ValueKind.Bool && value.Bool == operand.Bool;

@@ -23,6 +23,9 @@ internal sealed class StyleRegistry
     private readonly int fontBase;
     private readonly int fillBase;
     private readonly int formatBase;
+    private readonly int differentialBase;
+    private readonly Dictionary<Style, int> differentialIds = [];
+    private readonly List<Style> differentialFormats = [];
     private readonly bool fresh;
     private readonly Dictionary<(Style Style, string? Format), int> styleIndexes = [];
     private readonly Dictionary<CellFormat, int> formatIndexes = [];
@@ -63,12 +66,13 @@ internal sealed class StyleRegistry
         fontBase = original.FontCount;
         fillBase = original.FillCount;
         formatBase = original.CellFormatCount;
+        differentialBase = original.DifferentialFormatCount;
         nextCustomFormatId = Math.Max(NumberFormats.FirstCustomId, original.MaxFormatId + 1);
         styleIndexes[(Style.Default, null)] = 0;
     }
 
     /// <summary>True when styles were added that the file does not have yet.</summary>
-    public bool HasNewEntries => fresh == true || formats.Count > 0 || customFormats.Count > 0;
+    public bool HasNewEntries => fresh == true || formats.Count > 0 || customFormats.Count > 0 || differentialFormats.Count > 0;
 
     /// <summary>
     /// The cellXfs index for a style. <paramref name="defaultFormat"/> is used when the style has
@@ -116,6 +120,30 @@ internal sealed class StyleRegistry
         }
 
         styleIndexes[(style, format)] = index;
+
+        return index;
+    }
+
+    /// <summary>
+    /// The dxfs index for the style of a conditional format. Equal styles share an entry, and
+    /// a file that was opened keeps its own entries in front of the new ones.
+    /// </summary>
+    public int GetDifferentialIndex(Style style)
+    {
+        if (differentialIds.TryGetValue(style, out int existing) == true)
+        {
+            return existing;
+        }
+
+        // The number format gets its id now, so that numFmts, which is written first, has it.
+        if (style.NumberFormat is not null)
+        {
+            GetFormatId(style.NumberFormat);
+        }
+
+        int index = differentialBase + differentialFormats.Count;
+        differentialFormats.Add(style);
+        differentialIds[style] = index;
 
         return index;
     }
@@ -188,6 +216,7 @@ internal sealed class StyleRegistry
         await xml.WriteAttributeStringAsync(null, "builtinId", null, "0");
         await xml.WriteEndElementAsync();
         await xml.WriteEndElementAsync();
+        await WriteDifferentialListAsync(xml);
 
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
@@ -204,6 +233,7 @@ internal sealed class StyleRegistry
         await xml.WriteStartElementAsync(original.Prefix, original.LocalName, original.NamespaceURI);
         await xml.WriteAttributesAsync(original, true);
         bool numFormatsWritten = customFormats.Count == 0;
+        bool differentialWritten = differentialFormats.Count == 0;
 
         if (original.IsEmptyElement == false)
         {
@@ -218,8 +248,21 @@ internal sealed class StyleRegistry
                     continue;
                 }
 
+                // A file without dxfs gets one where the schema puts it: after cellStyles, before these.
+                if (differentialWritten == false && original.LocalName is "tableStyles" or "colors" or "extLst")
+                {
+                    await WriteDifferentialListAsync(xml);
+                    differentialWritten = true;
+                }
+
                 switch (original.LocalName)
                 {
+                    case "dxfs":
+                        await CopyListAsync(original, xml, differentialFormats.Count, WriteDifferentialFormatsAsync);
+                        differentialWritten = true;
+
+                        break;
+
                     case "numFmts":
                         await CopyListAsync(original, xml, customFormats.Count, WriteCustomFormatsAsync);
                         numFormatsWritten = true;
@@ -249,6 +292,11 @@ internal sealed class StyleRegistry
                         break;
                 }
             }
+        }
+
+        if (differentialWritten == false)
+        {
+            await WriteDifferentialListAsync(xml);
         }
 
         await xml.WriteEndElementAsync();
@@ -452,6 +500,81 @@ internal sealed class StyleRegistry
                     await xml.WriteAttributeStringAsync(null, "wrapText", null, "1");
                 }
 
+                await xml.WriteEndElementAsync();
+            }
+
+            await xml.WriteEndElementAsync();
+        }
+    }
+
+    private async Task WriteDifferentialListAsync(XmlWriter xml)
+    {
+        if (differentialFormats.Count == 0)
+        {
+            return;
+        }
+
+        await xml.WriteStartElementAsync(null, "dxfs", null);
+        await xml.WriteAttributeStringAsync(null, "count", null, Text(differentialFormats.Count));
+        await WriteDifferentialFormatsAsync(xml);
+        await xml.WriteEndElementAsync();
+    }
+
+    /// <summary>
+    /// The dxf entries. Children in schema order: font, numFmt, fill. A solid fill in a dxf is
+    /// given as bgColor, unlike in a cell format; that is how Excel itself writes it.
+    /// </summary>
+    private async Task WriteDifferentialFormatsAsync(XmlWriter xml)
+    {
+        foreach (Style style in differentialFormats)
+        {
+            await xml.WriteStartElementAsync(null, "dxf", null);
+
+            if (style.Bold == true || style.Italic == true || style.Underline == true || style.FontColor is not null)
+            {
+                await xml.WriteStartElementAsync(null, "font", null);
+
+                if (style.Bold == true)
+                {
+                    await xml.WriteElementStringAsync(null, "b", null, string.Empty);
+                }
+
+                if (style.Italic == true)
+                {
+                    await xml.WriteElementStringAsync(null, "i", null, string.Empty);
+                }
+
+                if (style.Underline == true)
+                {
+                    await xml.WriteElementStringAsync(null, "u", null, string.Empty);
+                }
+
+                if (style.FontColor is not null)
+                {
+                    await xml.WriteStartElementAsync(null, "color", null);
+                    await xml.WriteAttributeStringAsync(null, "rgb", null, Argb(style.FontColor));
+                    await xml.WriteEndElementAsync();
+                }
+
+                await xml.WriteEndElementAsync();
+            }
+
+            if (style.NumberFormat is not null)
+            {
+                await xml.WriteStartElementAsync(null, "numFmt", null);
+                await xml.WriteAttributeStringAsync(null, "numFmtId", null, Text(GetFormatId(style.NumberFormat)));
+                await xml.WriteAttributeStringAsync(null, "formatCode", null, style.NumberFormat);
+                await xml.WriteEndElementAsync();
+            }
+
+            if (style.Background is not null)
+            {
+                await xml.WriteStartElementAsync(null, "fill", null);
+                await xml.WriteStartElementAsync(null, "patternFill", null);
+                await xml.WriteStartElementAsync(null, "bgColor", null);
+                await xml.WriteAttributeStringAsync(null, "rgb", null, Argb(style.Background));
+                await xml.WriteEndElementAsync();
+                await xml.WriteEndElementAsync();
                 await xml.WriteEndElementAsync();
             }
 

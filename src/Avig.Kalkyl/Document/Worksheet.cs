@@ -8,7 +8,8 @@ namespace Avig.Kalkyl;
 /// </summary>
 public sealed class Worksheet
 {
-    private readonly SortedDictionary<int, RowEntry> rows = [];
+    private readonly RowTable rows = new();
+    private readonly SheetExtras extras = new();
     private List<ColumnRange> columns;
     private int frozenRows;
     private int frozenColumns;
@@ -54,35 +55,53 @@ public sealed class Worksheet
     }
 
     /// <summary>One past the last row that has a cell or row settings. 0 for an empty sheet.</summary>
-    public int RowCount
-    {
-        get
-        {
-            if (rows.Count == 0)
-            {
-                return 0;
-            }
-
-            return rows.Keys.Last() + 1;
-        }
-    }
+    public int RowCount => rowCount;
 
     /// <summary>One past the last column that has a cell. 0 for an empty sheet.</summary>
     public int ColumnCount
     {
         get
         {
-            int count = 0;
-
-            foreach (RowEntry row in rows.Values)
+            if (columnCount < 0)
             {
-                if (row.Cells.Count > 0)
-                {
-                    count = Math.Max(count, row.Cells.Keys.Last() + 1);
-                }
+                columnCount = CountColumns();
             }
 
-            return count;
+            return columnCount;
+        }
+    }
+
+    /// <summary>
+    /// Kept up to date as rows are added instead of found on demand: the formula engine asks
+    /// for the used area on every range it reads, and walking the rows for it made a
+    /// SUM(G2:I2) cost as much as the whole sheet (minutes for 200 000 formulas on 30 000 rows).
+    /// Rows are never removed, so the count only grows.
+    /// </summary>
+    private int rowCount;
+
+    /// <summary>As <see cref="rowCount"/>, but -1 when a cell in the last column was cleared and the count must be found again.</summary>
+    private int columnCount;
+
+    private int CountColumns()
+    {
+        int count = 0;
+
+        foreach (RowEntry row in rows.Values)
+        {
+            if (row.Cells.Count > 0)
+            {
+                count = Math.Max(count, row.Cells.LastColumn + 1);
+            }
+        }
+
+        return count;
+    }
+
+    private void CellAdded(int column)
+    {
+        if (columnCount >= 0 && column >= columnCount)
+        {
+            columnCount = column + 1;
         }
     }
 
@@ -129,7 +148,20 @@ public sealed class Worksheet
 
     internal IReadOnlyList<ColumnRange> Columns => columns;
 
-    internal SortedDictionary<int, RowEntry> RowEntries => rows;
+    internal RowTable RowEntries => rows;
+
+    /// <summary>The stored cell at a position, without the bounds check of the indexer: the formula engine's way in.</summary>
+    internal bool TryGetEntry(int row, int column, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CellEntry? entry)
+    {
+        if (rows.TryGetValue(row, out RowEntry? found) == true)
+        {
+            return found.Cells.TryGetValue(column, out entry);
+        }
+
+        entry = null;
+
+        return false;
+    }
 
     /// <summary>The cell at a position. Setting it replaces value, formula and style; use <see cref="SetValue"/> to keep the style.</summary>
     /// <param name="row">The row, 0-based.</param>
@@ -141,7 +173,7 @@ public sealed class Worksheet
         {
             Check(row, column);
 
-            if (rows.TryGetValue(row, out RowEntry? entry) == true && entry.Cells.TryGetValue(column, out CellEntry? cell) == true)
+            if (TryGetEntry(row, column, out CellEntry? cell) == true)
             {
                 return cell.Cell;
             }
@@ -195,6 +227,7 @@ public sealed class Worksheet
     }
 
     /// <summary>Puts a formula in a cell and keeps its style. The cached value is cleared until the workbook is recalculated.</summary>
+    /// <remarks>Never pass text from a user; see <see cref="Cell.FromFormula(string)"/>.</remarks>
     /// <param name="row">The row, 0-based.</param>
     /// <param name="column">The column, 0-based.</param>
     /// <param name="formula">The formula, with or without a leading <c>=</c>.</param>
@@ -213,6 +246,11 @@ public sealed class Worksheet
 
         if (rows.TryGetValue(row, out RowEntry? entry) == true && entry.Cells.Remove(column) == true)
         {
+            if (column + 1 >= columnCount)
+            {
+                columnCount = -1;
+            }
+
             Workbook.MarkChanged(this, row, column);
         }
     }
@@ -297,18 +335,150 @@ public sealed class Worksheet
         Workbook.MarkChanged();
     }
 
+    /// <summary>
+    /// Adds a conditional format to a range. Rules the file already has are kept as they are, and
+    /// win over the new ones where both apply.
+    /// </summary>
+    /// <param name="range">The cells, for example <c>B2:B100</c>.</param>
+    /// <param name="format">The rule.</param>
+    public void AddConditionalFormat(CellRange range, ConditionalFormat format)
+    {
+        extras.AddConditionalFormat(range, format);
+        Workbook.MarkChanged();
+    }
+
+    /// <summary>Adds a conditional format to a range given in A1 notation, such as <c>B2:B100</c>.</summary>
+    /// <param name="range">The cells.</param>
+    /// <param name="format">The rule.</param>
+    public void AddConditionalFormat(string range, ConditionalFormat format)
+    {
+        AddConditionalFormat(SheetWriter.ParseRange(range), format);
+    }
+
+    /// <summary>
+    /// Adds a chart over a block of cells. Charts and pictures the file already has are kept.
+    /// The series may refer to any sheet in the workbook.
+    /// </summary>
+    /// <param name="chart">The chart.</param>
+    /// <param name="area">The cells the chart covers, for example <c>E2:L20</c>.</param>
+    /// <returns>
+    /// Success; NotFound when a series refers to a sheet the workbook does not have; Invalid
+    /// when the file is Strict OOXML, which the package does not add drawings to.
+    /// </returns>
+    public Result AddChart(Chart chart, CellRange area)
+    {
+        ArgumentNullException.ThrowIfNull(chart);
+
+        if (CheckDrawable().IsFailure(out string? error, out ResultStatus status) == true)
+        {
+            return Result.Failure(error, status);
+        }
+
+        Result added = extras.AddChart(chart, area, Name, name => Workbook.Sheet(name).IsSuccess(out _) == true);
+
+        if (added.IsSuccess(out _, out _) == true)
+        {
+            Workbook.MarkChanged();
+        }
+
+        return added;
+    }
+
+    /// <summary>Adds a chart over a block of cells given in A1 notation, such as <c>E2:L20</c>.</summary>
+    /// <param name="chart">The chart.</param>
+    /// <param name="area">The cells the chart covers.</param>
+    /// <returns>As <see cref="AddChart(Chart, CellRange)"/>.</returns>
+    public Result AddChart(Chart chart, string area)
+    {
+        return AddChart(chart, SheetWriter.ParseRange(area));
+    }
+
+    /// <summary>Puts a picture with its top-left corner at a cell, at its own size times <paramref name="scale"/>.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="topLeft">The cell.</param>
+    /// <param name="scale">1 for the picture's own size (96 pixels to the inch), 0.5 for half.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddPicture(Picture picture, CellAddress topLeft, double scale = 1)
+    {
+        ArgumentNullException.ThrowIfNull(picture);
+        Result drawable = CheckDrawable();
+
+        if (drawable.IsSuccess(out _, out _) == true)
+        {
+            extras.AddPicture(picture, topLeft, scale);
+            Workbook.MarkChanged();
+        }
+
+        return drawable;
+    }
+
+    /// <summary>Puts a picture over a block of cells, stretched to fill it.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="area">The cells.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddPicture(Picture picture, CellRange area)
+    {
+        ArgumentNullException.ThrowIfNull(picture);
+        Result drawable = CheckDrawable();
+
+        if (drawable.IsSuccess(out _, out _) == true)
+        {
+            extras.AddPicture(picture, area);
+            Workbook.MarkChanged();
+        }
+
+        return drawable;
+    }
+
+    /// <summary>
+    /// Puts a picture at a cell such as <c>B2</c>, at its own size, or over a range such as
+    /// <c>B2:F12</c>, stretched to fill it.
+    /// </summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="reference">The cell or the range.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddPicture(Picture picture, string reference)
+    {
+        CellRange range = SheetWriter.ParseRange(reference);
+
+        if (reference.Contains(':', StringComparison.Ordinal) == true)
+        {
+            return AddPicture(picture, range);
+        }
+
+        return AddPicture(picture, range.First);
+    }
+
+    internal SheetExtras Extras => extras;
+
+    /// <summary>
+    /// A Strict OOXML file has its own namespaces for drawings and charts as well. Parts written
+    /// with the transitional ones would make a package that is neither, so none are added.
+    /// </summary>
+    private Result CheckDrawable()
+    {
+        if (Source is not null && string.Equals(Source.Namespace, Ooxml.SpreadsheetNamespace, StringComparison.Ordinal) == false)
+        {
+            return Result.Invalid($"The sheet '{Name}' is in a Strict OOXML file. Charts and pictures can be added to transitional files only; save it as an ordinary .xlsx in Excel first.");
+        }
+
+        return Result.Success();
+    }
+
     /// <summary>Stores a cell read from the file, with its original XML so that it is written back unchanged.</summary>
     internal void Load(int row, int column, CellEntry entry)
     {
         GetRow(row).Cells[column] = entry;
+        CellAdded(column);
     }
 
     internal RowEntry GetRow(int row)
     {
         if (rows.TryGetValue(row, out RowEntry? entry) == false)
         {
-            entry = new RowEntry([]);
-            rows[row] = entry;
+            entry = new RowEntry(new CellRow());
+            rows.Add(row, entry);
+            rowCount = Math.Max(rowCount, row + 1);
         }
 
         return entry;
@@ -362,6 +532,7 @@ public sealed class Worksheet
         }
 
         GetRow(row).Cells[column] = new CellEntry(value, null, styleIndex, keepStyle);
+        CellAdded(column);
         Workbook.MarkChanged(this, row, column);
     }
 
@@ -371,7 +542,7 @@ public sealed class Worksheet
 
         if (row.Cells.Count > 0)
         {
-            width = row.Cells.Keys.Last() + 1;
+            width = row.Cells.LastColumn + 1;
         }
 
         Cell[] cells = new Cell[width];
@@ -410,7 +581,7 @@ public sealed class Worksheet
 internal sealed record CellEntry(Cell Cell, string? RawXml, int StyleIndex, bool StyleFromFile);
 
 /// <summary>A row: its cells, and the row's own attributes from the file (height, hidden, style ...).</summary>
-internal sealed record RowEntry(SortedDictionary<int, CellEntry> Cells)
+internal sealed record RowEntry(CellRow Cells)
 {
     public IReadOnlyList<(string Prefix, string LocalName, string Namespace, string Value)> Attributes { get; set; } = [];
 }

@@ -8,7 +8,11 @@ namespace Avig.Kalkyl.Internal;
 /// </summary>
 internal static class ExcelDate
 {
-    private const double LastSerial = 2_958_465.999_999_9;
+    /// <summary>10000-01-01 in the 1900 system: every serial number below it is a date DateTime can hold.</summary>
+    private const double EndSerial1900 = 2_958_466;
+
+    /// <summary>10000-01-01 in the 1904 system, which counts 1 462 days fewer.</summary>
+    private const double EndSerial1904 = EndSerial1900 - 1_462;
 
     private static readonly DateTime Base1900 = new(1899, 12, 30, 0, 0, 0, DateTimeKind.Unspecified);
     private static readonly DateTime DayZero1900 = new(1899, 12, 31, 0, 0, 0, DateTimeKind.Unspecified);
@@ -42,7 +46,14 @@ internal static class ExcelDate
     {
         date = DateTime.MinValue;
 
-        if (double.IsFinite(serial) == false || serial < 0 || serial > LastSerial)
+        double end = EndSerial1900;
+
+        if (uses1904 == true)
+        {
+            end = EndSerial1904;
+        }
+
+        if (double.IsFinite(serial) == false || serial < 0 || serial >= end)
         {
             return false;
         }
@@ -70,6 +81,13 @@ internal static class ExcelDate
         }
 
         long milliseconds = (long)Math.Round(days * 86_400_000d, MidpointRounding.AwayFromZero);
+
+        // The last fraction of a millisecond before 10000-01-01 rounds up past what DateTime can hold.
+        if (milliseconds > (DateTime.MaxValue - start).Ticks / TimeSpan.TicksPerMillisecond)
+        {
+            return false;
+        }
+
         date = start.AddMilliseconds(milliseconds);
 
         return true;

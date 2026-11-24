@@ -32,6 +32,8 @@ internal sealed class FunctionCall
 
     public bool Uses1904 => Evaluator.Uses1904;
 
+    public TextConversion Conversion => Evaluator.Conversion;
+
     /// <summary>True when the argument was not written at all, or left empty.</summary>
     public bool IsMissing(int index)
     {
@@ -66,7 +68,7 @@ internal sealed class FunctionCall
     /// <summary>The argument as a number. Text that looks like a number, a date or a time is converted; other text gives #VALUE!.</summary>
     public bool TryNumber(int index, out double number, out Value error)
     {
-        Value converted = Coerce.ToNumber(Scalar(index), Uses1904);
+        Value converted = Coerce.ToNumber(Scalar(index), Conversion);
 
         return Unpack(converted, out number, out error);
     }
@@ -257,6 +259,42 @@ internal sealed class FunctionCall
     }
 
     /// <summary>
+    /// The argument's values without the blanks, in the order <see cref="Values"/> gives them.
+    /// A large, mostly empty range is read from the cells the sheet holds rather than position
+    /// by position, so SUM(A:XFD) does not visit 17 billion cells for one value in XFD1048576.
+    /// </summary>
+    public IEnumerable<Value> NonBlankValues(int index)
+    {
+        Value raw = Raw(index);
+
+        if (raw.Kind == ValueKind.Reference)
+        {
+            RangeReference range = raw.Reference!;
+            int lastRow = Math.Min(range.LastRow, range.UsedLastRow);
+            int lastColumn = Math.Min(range.LastColumn, range.UsedLastColumn);
+            long area = (long)Math.Max(0, lastRow - range.FirstRow + 1) * Math.Max(0, lastColumn - range.FirstColumn + 1);
+
+            if (Evaluator.PreferStored(range.Sheet, area) == true)
+            {
+                return SparseValues(range, lastRow, lastColumn);
+            }
+        }
+
+        return Values(index).Where(value => value.IsBlank == false);
+    }
+
+    private IEnumerable<Value> SparseValues(RangeReference range, int lastRow, int lastColumn)
+    {
+        foreach ((_, _, Value value) in Evaluator.StoredValues(range.Sheet, range.FirstRow, lastRow, range.FirstColumn, lastColumn))
+        {
+            if (value.IsBlank == false)
+            {
+                yield return value;
+            }
+        }
+    }
+
+    /// <summary>
     /// The numbers in the arguments from <paramref name="first"/> on, with Excel's rule for SUM,
     /// AVERAGE, MAX and the like: in references and arrays only numbers count (text, booleans and
     /// blanks are skipped); a value written directly is converted, so =SUM("2",TRUE) is 3 but
@@ -280,7 +318,7 @@ internal sealed class FunctionCall
 
             if (IsRangeOrArray(index) == true)
             {
-                foreach (Value item in Values(index))
+                foreach (Value item in NonBlankValues(index))
                 {
                     switch (item.Kind)
                     {
@@ -316,7 +354,7 @@ internal sealed class FunctionCall
                 continue;
             }
 
-            Value converted = Coerce.ToNumber(scalar, Uses1904);
+            Value converted = Coerce.ToNumber(scalar, Conversion);
 
             if (converted.IsError == true)
             {

@@ -1,0 +1,1 @@
+EVEN(-Rate%,STEYX(ACOTH("x""y",--Other!A1,A1048576,QUARTILE())," 1,5 "),B2:B8)

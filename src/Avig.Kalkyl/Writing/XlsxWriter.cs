@@ -34,6 +34,11 @@ public sealed class XlsxWriter : IAsyncDisposable
         Encoding = new UTF8Encoding(false),
         Indent = false,
         CloseOutput = false,
+
+        // The default, Replace, writes every \n in a cell as Environment.NewLine: "a\nb" became
+        // "a\r\nb" on Windows, and ClosedXML read it back that way. Entitize leaves text as it
+        // is and writes line breaks in attributes as references, which a reader cannot fold away.
+        NewLineHandling = NewLineHandling.Entitize,
     };
 
     private static readonly SearchValues<char> ForbiddenNameCharacters = SearchValues.Create(":\\/?*[]");
@@ -43,6 +48,7 @@ public sealed class XlsxWriter : IAsyncDisposable
     private readonly ZipArchive archive;
     private readonly StyleRegistry styles = new();
     private readonly List<SheetWriter> sheets = [];
+    private readonly DrawingPackage drawings;
     private bool completed;
 
     private XlsxWriter(Stream stream, bool leaveOpen, ZipArchive archive)
@@ -50,6 +56,7 @@ public sealed class XlsxWriter : IAsyncDisposable
         this.stream = stream;
         this.leaveOpen = leaveOpen;
         this.archive = archive;
+        drawings = new DrawingPackage(archive, []);
     }
 
     /// <summary>The sheets added so far, in order.</summary>
@@ -205,7 +212,7 @@ public sealed class XlsxWriter : IAsyncDisposable
         int index = sheets.Count;
         ZipArchiveEntry entry = archive.CreateEntry(SheetPath(index), CompressionLevel.Optimal);
         Stream entryStream = await entry.OpenAsync(cancellationToken);
-        SheetWriter sheet = new(name, index, entryStream, styles);
+        SheetWriter sheet = new(name, index, entryStream, styles, SheetExists);
         sheets.Add(sheet);
 
         return sheet;
@@ -213,10 +220,32 @@ public sealed class XlsxWriter : IAsyncDisposable
 
     private async Task FinishCurrentAsync(CancellationToken cancellationToken)
     {
-        if (sheets.Count > 0)
+        if (sheets.Count == 0 || sheets[^1].IsFinished == true)
         {
-            await sheets[^1].FinishAsync(cancellationToken);
+            return;
         }
+
+        SheetWriter sheet = sheets[^1];
+        await sheet.FinishAsync(cancellationToken);
+
+        // The sheet's entry is closed now, so the parts its drawing points to can follow it in the zip.
+        if (sheet.Extras.Drawings.Count > 0)
+        {
+            await WriteDrawingPartsAsync(sheet, cancellationToken);
+        }
+    }
+
+    /// <summary>A sheet's drawing, its charts and pictures, and the relationships from the sheet to the drawing and on.</summary>
+    private async Task WriteDrawingPartsAsync(SheetWriter sheet, CancellationToken cancellationToken)
+    {
+        string drawingPath = await drawings.WriteDrawingAsync(sheet.Extras.Drawings, cancellationToken);
+        (string, string, string)[] relationships = [(SheetWriter.DrawingRelationshipId, DrawingXml.DrawingRelationship, "/" + drawingPath)];
+        await WritePartAsync("xl/worksheets/_rels/sheet" + Text(sheet.Index + 1) + ".xml.rels", xml => DrawingXml.WriteRelationshipsAsync(xml, relationships), cancellationToken);
+    }
+
+    private bool SheetExists(string name)
+    {
+        return sheets.Exists(sheet => string.Equals(sheet.Name, name, StringComparison.OrdinalIgnoreCase) == true);
     }
 
     private async Task WritePartAsync(string path, Func<XmlWriter, Task> write, CancellationToken cancellationToken)
@@ -302,6 +331,12 @@ public sealed class XlsxWriter : IAsyncDisposable
         await xml.WriteStartElementAsync(null, "Types", Ooxml.ContentTypesNamespace);
         await WriteDefaultTypeAsync(xml, "rels", Ooxml.RelationshipsContentType);
         await WriteDefaultTypeAsync(xml, "xml", "application/xml");
+
+        foreach ((string extension, string contentType) in drawings.ImageTypes)
+        {
+            await WriteDefaultTypeAsync(xml, extension, contentType);
+        }
+
         await WriteOverrideTypeAsync(xml, "/xl/workbook.xml", Ooxml.WorkbookContentType);
 
         foreach (SheetWriter sheet in sheets)
@@ -310,6 +345,12 @@ public sealed class XlsxWriter : IAsyncDisposable
         }
 
         await WriteOverrideTypeAsync(xml, "/xl/styles.xml", Ooxml.StylesContentType);
+
+        foreach ((string partName, string contentType) in drawings.Overrides)
+        {
+            await WriteOverrideTypeAsync(xml, partName, contentType);
+        }
+
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
     }

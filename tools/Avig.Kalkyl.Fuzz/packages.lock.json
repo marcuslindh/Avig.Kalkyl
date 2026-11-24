@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Avig.Analyzers": {
+        "type": "Direct",
+        "requested": "[1.2.0, )",
+        "resolved": "1.2.0",
+        "contentHash": "dnpDYQFgf2MP3lUiJFeU63kvHIEUXzeeNSMUmnwjtv9owVDei59aI8MYFdZL8dUcwUBE3Tr3QllcQoImMWOsTA=="
+      },
+      "SharpFuzz": {
+        "type": "Direct",
+        "requested": "[2.3.0, )",
+        "resolved": "2.3.0",
+        "contentHash": "5f11toR82RVCIBTr5XuuauJgesGVXIAO6vBCvLThNbrcer9NN6qB2HCA/Q122BvH2qRPsLx14O6QVtCbgRQhog==",
+        "dependencies": {
+          "SharpFuzz.Common": "2.2.0",
+          "dnlib": "4.4.0"
+        }
+      },
+      "Avig.Result": {
+        "type": "Transitive",
+        "resolved": "1.0.2",
+        "contentHash": "CUYoKrg/M0mrRFn83f7rNwN5ieGhdrV0IYMF7qpC2+/sukP7z238YO/yY84hQ3iuhC8Qau+H2M4EjiO9+/M3dQ=="
+      },
+      "dnlib": {
+        "type": "Transitive",
+        "resolved": "4.4.0",
+        "contentHash": "cKHI720q+zfEEvzklWVGt6B0TH3AibAyJbpUJl4U6KvTP13tycfnqJpkGHRZ/oQ45BTIoIxIwltHIJVDN+iCqQ=="
+      },
+      "SharpFuzz.Common": {
+        "type": "Transitive",
+        "resolved": "2.2.0",
+        "contentHash": "biITWpwnMR7HUp43lAGU97DWq/4LfyXqqhuOK0Z4IuRP97KjQMOe/GKq3wE1KY21gNrc7OPO9HbAtQUvMKTImA=="
+      },
+      "avig.kalkyl": {
+        "type": "Project",
+        "dependencies": {
+          "Avig.Result": "[1.0.2, )"
+        }
+      }
+    }
+  }
+}

@@ -47,6 +47,98 @@ internal static class XmlParts
         return false;
     }
 
+    /// <summary>
+    /// Invalid for a zip directory no spreadsheet program writes: two entries with the same name
+    /// (case ignored, \ read as /), a name that climbs out of the package (..), starts at a root
+    /// or a drive, or holds control characters, and an entry that cannot be unpacked (a
+    /// compression method .NET does not have, or encryption). Duplicates let two readers see two
+    /// different files; such names would be passed on when the file is saved, to whoever unpacks
+    /// it next; and an entry that cannot be opened would otherwise fail only when it is saved.
+    /// </summary>
+    public static async Task<Result> CheckEntriesAsync(ZipArchive archive, CancellationToken cancellationToken)
+    {
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (ZipArchiveEntry entry in archive.Entries)
+        {
+            string name = entry.FullName.Replace('\\', '/');
+
+            if (names.Add(name) == false)
+            {
+                return Result.Invalid($"The file is damaged: the part '{entry.FullName}' is in it twice.");
+            }
+
+            // An empty name opened fine and then failed the save, where the entry is written again.
+            if (name.Length == 0)
+            {
+                return Result.Invalid("The file is damaged: it has a part without a name.");
+            }
+
+            bool climbs = name.Split('/').Contains("..");
+            bool rooted = name.StartsWith('/') == true || (name.Length >= 2 && name[1] == ':');
+
+            if (climbs == true || rooted == true || name.Any(char.IsControl) == true)
+            {
+                return Result.Invalid($"The file is damaged: the part name '{entry.FullName}' points outside the package.");
+            }
+
+            try
+            {
+                await using Stream stream = await entry.OpenAsync(cancellationToken);
+            }
+            catch (Exception exception) when (exception is NotSupportedException or InvalidDataException)
+            {
+                return Result.Invalid($"The file is damaged: the part '{entry.FullName}' cannot be unpacked ({exception.Message}).");
+            }
+        }
+
+        return Result.Success();
+    }
+
+    /// <summary>A reader for a part of a file, with <see cref="Settings"/> and the nesting limit of <see cref="Internal.DepthLimitedXmlReader"/>.</summary>
+    public static XmlReader CreateReader(Stream stream)
+    {
+        return new Internal.DepthLimitedXmlReader(XmlReader.Create(stream, Settings));
+    }
+
+    /// <summary>As <see cref="CreateReader(Stream)"/>, for a fragment such as one cell's XML.</summary>
+    public static XmlReader CreateReader(TextReader text, XmlReaderSettings settings, XmlParserContext context)
+    {
+        return new Internal.DepthLimitedXmlReader(XmlReader.Create(text, settings, context));
+    }
+
+    /// <summary>
+    /// Opens a part of a file being read, held to the size its zip header gives. Every part
+    /// that is read goes through here (see <see cref="Internal.LimitedStream"/>).
+    /// </summary>
+    public static async Task<Stream> OpenEntryAsync(ZipArchiveEntry entry, CancellationToken cancellationToken)
+    {
+        Stream stream = await entry.OpenAsync(cancellationToken);
+
+        return new Internal.LimitedStream(stream, entry.Length, entry.FullName);
+    }
+
+    /// <summary>
+    /// Invalid when the parts of the file add up to more than <paramref name="limits"/> allows
+    /// unpacked. Checked from the zip directory before anything is read.
+    /// </summary>
+    public static Result CheckSize(ZipArchive archive, KalkylLimits limits)
+    {
+        long total = 0;
+
+        foreach (ZipArchiveEntry entry in archive.Entries)
+        {
+            total += entry.Length;
+
+            if (total > limits.MaxUncompressedBytes || total < 0)
+            {
+                return Result.Invalid($"The file unpacks to more than {limits.MaxUncompressedBytes:N0} bytes, the limit set in KalkylLimits.MaxUncompressedBytes. It may be a zip bomb; if it is a file you trust, open it with larger limits.");
+            }
+        }
+
+        return Result.Success();
+    }
+
     public static bool IsElement(XmlReader reader, string localName)
     {
         return reader.NodeType == XmlNodeType.Element && string.Equals(reader.LocalName, localName, StringComparison.Ordinal) == true;
@@ -131,8 +223,8 @@ internal static class XmlParts
             return relationships;
         }
 
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader reader = XmlReader.Create(stream, Settings);
+        await using Stream stream = await OpenEntryAsync(entry, cancellationToken);
+        using XmlReader reader = CreateReader(stream);
 
         while (await reader.ReadAsync() == true)
         {

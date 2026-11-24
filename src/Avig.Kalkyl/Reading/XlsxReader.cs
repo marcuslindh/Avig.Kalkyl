@@ -83,9 +83,20 @@ public sealed class XlsxReader : IAsyncDisposable
     /// Conflict when another program holds it locked, and Invalid when it is not an .xlsx
     /// workbook (including old .xls files and password-protected workbooks).
     /// </returns>
-    public static async Task<Result<XlsxReader>> OpenAsync(string path, CancellationToken cancellationToken = default)
+    public static Task<Result<XlsxReader>> OpenAsync(string path, CancellationToken cancellationToken = default)
+    {
+        return OpenAsync(path, KalkylLimits.Default, cancellationToken);
+    }
+
+    /// <summary>Opens a file for reading, with limits on how much it may unpack to.</summary>
+    /// <param name="path">The file.</param>
+    /// <param name="limits">The limits; <see cref="KalkylLimits.Default"/> unless the file is trusted.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>As <see cref="OpenAsync(string, CancellationToken)"/>, and Invalid when the file goes past a limit.</returns>
+    public static async Task<Result<XlsxReader>> OpenAsync(string path, KalkylLimits limits, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(limits);
         FileStream file;
 
         try
@@ -109,7 +120,7 @@ public sealed class XlsxReader : IAsyncDisposable
             return Result<XlsxReader>.Conflict($"'{path}' could not be opened: {exception.Message}");
         }
 
-        Result<XlsxReader> opened = await OpenAsync(file, false, cancellationToken);
+        Result<XlsxReader> opened = await OpenAsync(file, limits, false, cancellationToken);
 
         if (opened.IsFailure(out _, out _) == true)
         {
@@ -127,22 +138,42 @@ public sealed class XlsxReader : IAsyncDisposable
     /// <param name="leaveOpen">Leave the stream open when the reader is disposed.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The reader, or Invalid when the content is not an .xlsx workbook.</returns>
-    public static async Task<Result<XlsxReader>> OpenAsync(Stream input, bool leaveOpen = false, CancellationToken cancellationToken = default)
+    public static Task<Result<XlsxReader>> OpenAsync(Stream input, bool leaveOpen = false, CancellationToken cancellationToken = default)
+    {
+        return OpenAsync(input, KalkylLimits.Default, leaveOpen, cancellationToken);
+    }
+
+    /// <summary>Reads from a stream, with limits on how much the content may unpack to.</summary>
+    /// <param name="input">The stream.</param>
+    /// <param name="limits">The limits; <see cref="KalkylLimits.Default"/> unless the content is trusted.</param>
+    /// <param name="leaveOpen">Leave the stream open when the reader is disposed.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The reader, or Invalid when the content is not an .xlsx workbook or goes past a limit.</returns>
+    public static async Task<Result<XlsxReader>> OpenAsync(Stream input, KalkylLimits limits, bool leaveOpen = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(limits);
         Stream source = input;
         bool ownsSource = false;
 
         if (input.CanSeek == false)
         {
             MemoryStream copy = new();
-            await input.CopyToAsync(copy, cancellationToken);
+
+            // An endless stream must not fill memory either; the zip file is never larger than what it unpacks to.
+            if (await CopyLimitedAsync(input, copy, limits.MaxUncompressedBytes, cancellationToken) == false)
+            {
+                await copy.DisposeAsync();
+
+                return Result<XlsxReader>.Invalid($"The stream is longer than {limits.MaxUncompressedBytes:N0} bytes, the limit set in KalkylLimits.MaxUncompressedBytes.");
+            }
+
             copy.Position = 0;
             source = copy;
             ownsSource = true;
         }
 
-        Result<XlsxReader> opened = await OpenSeekableAsync(source, ownsSource || leaveOpen == false, cancellationToken);
+        Result<XlsxReader> opened = await OpenSeekableAsync(source, ownsSource || leaveOpen == false, limits, cancellationToken);
 
         if (ownsSource == true && leaveOpen == false)
         {
@@ -207,7 +238,30 @@ public sealed class XlsxReader : IAsyncDisposable
         }
     }
 
-    private static async Task<Result<XlsxReader>> OpenSeekableAsync(Stream source, bool disposeSource, CancellationToken cancellationToken)
+    /// <summary>Copies at most <paramref name="limit"/> bytes; false when the source has more.</summary>
+    internal static async Task<bool> CopyLimitedAsync(Stream source, Stream target, long limit, CancellationToken cancellationToken)
+    {
+        byte[] buffer = new byte[81_920];
+        long total = 0;
+        int read = await source.ReadAsync(buffer, cancellationToken);
+
+        while (read > 0)
+        {
+            total += read;
+
+            if (total > limit)
+            {
+                return false;
+            }
+
+            await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            read = await source.ReadAsync(buffer, cancellationToken);
+        }
+
+        return true;
+    }
+
+    private static async Task<Result<XlsxReader>> OpenSeekableAsync(Stream source, bool disposeSource, KalkylLimits limits, CancellationToken cancellationToken)
     {
         Result signature = await CheckSignatureAsync(source, cancellationToken);
 
@@ -222,14 +276,32 @@ public sealed class XlsxReader : IAsyncDisposable
         {
             archive = await ZipArchive.CreateAsync(source, ZipArchiveMode.Read, true, null, cancellationToken);
         }
-        catch (InvalidDataException exception)
+        catch (Exception exception) when (exception is InvalidDataException or NotSupportedException)
         {
             return Result<XlsxReader>.Invalid($"The file is not a valid .xlsx workbook: the zip container is damaged ({exception.Message}).");
         }
 
+        Result size = XmlParts.CheckSize(archive, limits);
+
+        if (size.IsFailure(out string? sizeError, out ResultStatus sizeStatus) == true)
+        {
+            await archive.DisposeAsync();
+
+            return Result<XlsxReader>.Failure(sizeError, sizeStatus);
+        }
+
+        Result entries = await XmlParts.CheckEntriesAsync(archive, cancellationToken);
+
+        if (entries.IsFailure(out string? entriesError, out ResultStatus entriesStatus) == true)
+        {
+            await archive.DisposeAsync();
+
+            return Result<XlsxReader>.Failure(entriesError, entriesStatus);
+        }
+
         try
         {
-            Result<XlsxReader> loaded = await LoadAsync(source, disposeSource == false, archive, cancellationToken);
+            Result<XlsxReader> loaded = await LoadAsync(source, disposeSource == false, archive, limits, cancellationToken);
 
             if (loaded.IsFailure(out _, out _) == true)
             {
@@ -248,7 +320,7 @@ public sealed class XlsxReader : IAsyncDisposable
         {
             await archive.DisposeAsync();
 
-            return Result<XlsxReader>.Invalid($"The file is not a valid .xlsx workbook: {exception.Message}");
+            return Result<XlsxReader>.Invalid(KalkylError.Describe(exception));
         }
     }
 
@@ -272,7 +344,7 @@ public sealed class XlsxReader : IAsyncDisposable
         return Result.Success();
     }
 
-    private static async Task<Result<XlsxReader>> LoadAsync(Stream source, bool leaveOpen, ZipArchive archive, CancellationToken cancellationToken)
+    private static async Task<Result<XlsxReader>> LoadAsync(Stream source, bool leaveOpen, ZipArchive archive, KalkylLimits limits, CancellationToken cancellationToken)
     {
         Dictionary<string, (string Type, string Target)> rootRelationships = await XmlParts.ReadRelationshipsAsync(archive, "_rels/.rels", cancellationToken);
         string workbookPath = "xl/workbook.xml";
@@ -306,7 +378,17 @@ public sealed class XlsxReader : IAsyncDisposable
                 continue;
             }
 
-            sheets.Add(new SheetPart(new SheetInfo(name, sheets.Count, visibility), Ooxml.ResolveTarget(workbookPath, relationship.Target), relationshipId, sheetId));
+            string path = Ooxml.ResolveTarget(workbookPath, relationship.Target);
+            SheetPart? sharing = sheets.Find(sheet => string.Equals(sheet.Path, path, StringComparison.OrdinalIgnoreCase) == true);
+
+            // Two sheets on one part: an edit to one would change the other, and saving wrote
+            // the part twice, which made a zip file no program can read.
+            if (sharing is not null)
+            {
+                return Result<XlsxReader>.Invalid($"The file is damaged: the sheets '{sharing.Info.Name}' and '{name}' point to the same part, '{path}'.");
+            }
+
+            sheets.Add(new SheetPart(new SheetInfo(name, sheets.Count, visibility), path, relationshipId, sheetId));
         }
 
         IReadOnlyList<string> sharedStrings = [];
@@ -318,7 +400,7 @@ public sealed class XlsxReader : IAsyncDisposable
 
             if (Ooxml.IsRelationship(type, "sharedStrings") == true && XmlParts.TryFindEntry(archive, path, out ZipArchiveEntry? stringsEntry) == true)
             {
-                sharedStrings = await ReadSharedStringsAsync(stringsEntry, cancellationToken);
+                sharedStrings = await ReadSharedStringsAsync(stringsEntry, limits.MaxSharedStrings, cancellationToken);
             }
             else if (Ooxml.IsRelationship(type, "styles") == true && XmlParts.TryFindEntry(archive, path, out ZipArchiveEntry? stylesEntry) == true)
             {
@@ -333,12 +415,22 @@ public sealed class XlsxReader : IAsyncDisposable
     {
         List<(string, string, int, SheetVisibility)> sheets = [];
         bool uses1904 = false;
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader reader = XmlParts.CreateReader(stream);
+
+        // Only the sheets in <sheets>, the workbook's own child: the saver rewrites that element and
+        // copies the others, so a <sheet> anywhere else (found by libFuzzer in a <sheetz>) came back
+        // as a second copy of every sheet.
+        string section = string.Empty;
 
         while (await reader.ReadAsync() == true)
         {
-            if (XmlParts.IsElement(reader, "workbookPr") == true)
+            if (reader.NodeType == XmlNodeType.Element && reader.Depth == 1)
+            {
+                section = reader.LocalName;
+            }
+
+            if (reader.Depth == 1 && XmlParts.IsElement(reader, "workbookPr") == true)
             {
                 string? date1904 = reader.GetAttribute("date1904");
                 uses1904 = date1904 is "1" or "true";
@@ -346,7 +438,7 @@ public sealed class XlsxReader : IAsyncDisposable
                 continue;
             }
 
-            if (XmlParts.IsElement(reader, "sheet") == true)
+            if (section == "sheets" && reader.Depth == 2 && XmlParts.IsElement(reader, "sheet") == true)
             {
                 string? name = reader.GetAttribute("name");
 
@@ -370,17 +462,23 @@ public sealed class XlsxReader : IAsyncDisposable
         return (sheets, uses1904);
     }
 
-    private static async Task<IReadOnlyList<string>> ReadSharedStringsAsync(ZipArchiveEntry entry, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> ReadSharedStringsAsync(ZipArchiveEntry entry, long limit, CancellationToken cancellationToken)
     {
         List<string> strings = [];
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader reader = XmlParts.CreateReader(stream);
 
         while (await reader.ReadAsync() == true)
         {
             if (XmlParts.IsElement(reader, "si") == true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (strings.Count >= limit)
+                {
+                    throw new InvalidDataException($"The file has more than {limit:N0} shared strings, the limit set in KalkylLimits.MaxSharedStrings.");
+                }
+
                 strings.Add(await XmlParts.ReadRichTextAsync(reader));
             }
         }

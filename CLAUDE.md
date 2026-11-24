@@ -18,7 +18,23 @@ dotnet build Avig.Kalkyl.slnx
 dotnet test Avig.Kalkyl.slnx
 ./publish.ps1                 # testar, packar, formkontrollerar, lägger i G:\LocalNugetRepo
 ./release.ps1 -DryRun
+
+# Fuzzning (tools/Avig.Kalkyl.Fuzz, se dess README)
+dotnet run --project tools/Avig.Kalkyl.Fuzz -c Release -- all --smoke
+dotnet run --project tools/Avig.Kalkyl.Fuzz -c Release -- formula-sweep --smoke --iter 110000
 ```
+
+`tests/Avig.Kalkyl.Compatibility` läser riktiga arbetsböcker från Excel-handledningar
+(hämtas med `download.ps1`, committas inte) med Avig.Kalkyl och ExcelDataReader, ClosedXML,
+Sylvan och MiniExcel, och räknar om formlerna mot Excels sparade värden. Kör det efter ändringar
+i läsaren, skrivaren, saveren eller formelmotorn. Ett fynd blir ett test i
+`CompatibilityFindingsTests.cs`. Huvudtesterna körs med en-US (`TestCulture.cs`), eftersom
+`Workbook.Culture` annars är maskinens.
+
+`tools/Avig.Kalkyl.Fuzz` är en SharpFuzz-harness som Medusa.Fuzz, och den ingår inte i paketet.
+Kör smoke-läget efter ändringar i läsaren, saveren, `CellText`, `ExcelDate`, lexern eller
+funktionerna. Ett fynd blir ett regressionstest i `FuzzFindingsTests.cs`, och ett nytt mål ska
+vara verifierat genom sabotage (tabellen i README:n).
 
 ## Regler som betyder mest
 
@@ -33,10 +49,24 @@ dotnet test Avig.Kalkyl.slnx
 - **Bara async** för allt som gör I/O, och `CancellationToken` förs alltid vidare.
 - **Säkert för trimning och AOT** (`IsAotCompatible`). Ingen reflektion; den typade
   mappningen i milstolpe 2 blir en källgenerator.
+- **En fil utifrån får inte kunna ta slut på minnet eller stacken.** Allt som läser en zip-post går via `XmlParts.OpenEntryAsync`, alla XmlReader skapas med `XmlParts.CreateReader` (djupgräns 100), och allt som skapar en matris går via `ValueArray` (`KalkylLimits.MaxArrayCells`). Ingen rekursion som växer med indata utan gräns: parsern begränsar nästling, och evaluatorn går igenom operatorkedjor i en loop. Aggregat över stora områden går via `FunctionCall.NonBlankValues` eller rutnätets `StoredValues`, inte position för position. Nya attackfiler blir tester i `HostileFilesTests.cs`; testplanen är `docs/testplan.md`.
+- **Ett fel om en fil ska få en felkod.** Meddelanden om skadade filer börjar med `The file is damaged`, meddelanden om gränser innehåller `the limit set in KalkylLimits.`, och meddelanden om filer som inte är .xlsx börjar med `The file is not an .xlsx workbook`. Det är så `KalkylError.ErrorKind()` känner igen dem. Ett `InvalidDataException` som blir ett `Result` går via `KalkylError.Describe`. Fuzzern och `HostileFilesTests` kräver en felkod för varje fil som avvisas.
 - **Läs XML på lokalt namn**, inte namnrymd, så att Strict OOXML fungerar. Ingen DTD.
 - **Det som skrivs ska klara Microsofts schemavalidator.** Testet
   `A_file_with_every_feature_passes_Microsofts_schema_validation` ska täcka varje ny funktion
   i skrivaren.
+- **README-exemplen är tester.** Varje kodblock i README.md har en rad `<!-- example: namn -->`
+  före sig och ska vara exakt koden i `#region example: namn` i
+  `tests/Avig.Kalkyl.Tests/ReadmeExamples.cs`. Ändra koden där, kör testerna, och kopiera
+  sedan in den i README. `Every_README_example_is_code_that_runs_here` failar om de skiljer sig,
+  och varje csharp-block i README måste vara ett sådant exempel. Ett nytt publikt API ska få ett
+  scenario och en rad i README:s "The API at a glance".
+- **Diagram, bilder och villkorsstyrd formatering** samlas per blad i `SheetExtras`, som både
+  `SheetWriter` och `Worksheet` använder, och skrivs av `DrawingXml`, `DrawingPackage` och
+  `ConditionalFormatXml`. Ett blad har högst en ritning: i en öppnad fil läggs nya ankare till i
+  den som finns, och nya regler läggs efter de befintliga med högre `priority`. Regelstilarna
+  blir `dxf`-poster i `StyleRegistry`. Strict OOXML får inga ritningar. Testerna finns i
+  `DrawingTests.cs`; Excel-checkfil 10–12 visar dem i riktiga Excel.
 
 ## Versioner
 

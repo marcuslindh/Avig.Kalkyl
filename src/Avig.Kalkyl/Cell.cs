@@ -49,6 +49,11 @@ public readonly struct Cell : IEquatable<Cell>
     }
 
     /// <summary>Creates a formula cell.</summary>
+    /// <remarks>
+    /// Never pass text from a user: whoever opens the file in Excel runs it, and a formula can
+    /// send data elsewhere (HYPERLINK) or start programs (DDE). Write such text with
+    /// <see cref="Of"/>, which always writes text, even when it starts with = + - or @.
+    /// </remarks>
     /// <param name="formula">The formula, with or without a leading <c>=</c>, for example <c>SUM(B2:B9)</c>.</param>
     /// <returns>The cell. Excel calculates it when the file is opened.</returns>
     public static Cell FromFormula(string formula)
