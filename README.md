@@ -106,6 +106,19 @@ and the 1900 and 1904 date systems. Not supported: dynamic-array spilling (an ar
 its first value), structured table references (`Table1[Column]` gives `#REF!`), R1C1 references
 in INDIRECT, and external workbooks.
 
+Text that a formula has to read as a number or a date (`"1,5"*2`, `YEAR("3/2/2013")`,
+`COUNTIFS(B:B,">=31/12/2018")`) is read in `Workbook.Culture`. Like Excel, that is the culture
+of the machine that calculates, unless you set it. Set it to the culture the workbook was made
+in to get the results its author saw:
+
+```csharp
+book.Culture = CultureInfo.GetCultureInfo("en-GB");   // "3/2/2013" is 3 February
+await book.RecalculateAsync(RecalculationScope.All);
+```
+
+ISO dates (`2026-02-01`) are read in every culture. Formatting with TEXT, DOLLAR and FIXED is
+not affected by the culture.
+
 ## Streaming
 
 ```csharp
@@ -170,6 +183,74 @@ are filled in.
 | Not an .xlsx, an old .xls, password-protected, damaged, bad sheet name, bad cell when mapping | `Invalid` |
 | A sheet damaged half-way through a stream | `InvalidDataException` when the damaged row is reached |
 | Calling something in the wrong order, values Excel cannot store | `InvalidOperationException`, `ArgumentException` |
+| A file past one of the limits below | `Invalid` |
+| A formula past the array limit | `#NUM!` in the cell |
+| A cancelled or timed-out call | `OperationCanceledException` |
+
+## Files from outside
+
+An .xlsx is a zip file: a few kilobytes of it can unpack to gigabytes, and a small file can
+describe billions of cells. So limits are on by default, high enough for any workbook people
+make by hand (`KalkylLimits.Default`):
+
+| Limit | Default | What it stops |
+| --- | --- | --- |
+| `MaxUncompressedBytes` | 1 GiB | The parts unpacking to more than this together. This is checked from the zip directory before anything is read, and each part is also held to the size its header gives, so a header cannot lie. A stream that is not seekable is not copied past this either. |
+| `MaxCells` | 20 million | The document model holding more cells. `XlsxReader` keeps one row at a time and is not affected. |
+| `MaxSharedStrings` | 10 million | More shared strings. They are read into memory when the file is opened, by `XlsxReader` too. |
+| `MaxArrayCells` | 10 million | One array in a formula holding more values, for example `A1:A100000*TRANSPOSE(A1:A100000)`. A larger one gives `#NUM!`. Sums, counts and the *IF functions over whole columns read only the cells that are there, so `SUM(A:XFD)` is quick however far away the last cell is. |
+
+```csharp
+Result<Workbook> opened = await Workbook.OpenAsync(upload, KalkylLimits.Default with { MaxCells = 1_000_000 });
+Result<XlsxReader> trusted = await XlsxReader.OpenAsync(path, KalkylLimits.Unlimited);
+```
+
+Time is limited with the `CancellationToken` that every call takes, `Workbook.Evaluate`
+included. Cancellation is checked for every row read and every part of a formula evaluated:
+
+```csharp
+using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(10));
+Result<Workbook> opened = await Workbook.OpenAsync(upload, timeout.Token);
+await book.RecalculateAsync(RecalculationScope.All, timeout.Token);
+```
+
+Some protections are always on and cannot be turned off:
+
+- XML is read without DTDs, which stops XXE and "billion laughs".
+- Rows after 1,048,576 and columns after XFD make the file damaged.
+- A formula may be at most 8,192 characters long, as in Excel.
+- Parentheses, signs and functions may nest at most 255 levels deep, and functions inside
+  functions at most 64, as in Excel. A deeper formula gives `Invalid` and does not overflow
+  the stack.
+- XML elements may nest at most 100 levels deep. Excel writes about ten.
+- A cell holds at most 32,767 characters, and longer text in a file makes the file damaged.
+- The zip directory may not have two parts with the same name, a part without a name, or a
+  name that climbs out of the package (`..`, `/x`, `C:/x`). An entry that cannot be unpacked
+  makes the file damaged when it is opened, not when it is saved. Two sheets may not share a part.
+
+The package never reaches the network, starts a process, loads code or deserializes objects,
+and it reads and writes only the paths you give it. DDE, external workbooks, `WEBSERVICE`,
+`CELL("filename")` and `INFO` give `#NAME?` or `#REF!`. A test checks the source for this.
+
+**Macros.** A VBA project, Excel 4.0 macro sheets and ActiveX controls are never run, but like
+everything else the package does not understand they are kept when the file is saved. So
+opening and saving a file does not make it safe. `Workbook.HasMacros` tells you whether there
+is any, and `Workbook.RemoveMacros()` makes the next save drop the VBA project and turn the
+workbook into a plain .xlsx (macro sheets and ActiveX controls cannot be removed and give `Invalid`).
+
+**Formulas from users.** Text written with `Cell.Of` or as a value is always text, even when it
+starts with `=`, `+`, `-` or `@`. Only `Cell.FromFormula` and `Worksheet.SetFormula` make
+formulas, so never give them text from a user.
+
+**Error messages** name the file path you gave, sheet names and the content of the cell that
+was wrong. They are for your log, not for the person who uploaded the file. Show them
+`Result.Status` and a message of your own.
+
+**Concurrency.** A `Workbook` or `XlsxReader` is not safe to change from several threads at
+once; separate instances are independent, also with different limits. The limits hold per file,
+so a service that takes uploads should also limit how many files it works on at a time, for
+example with a `SemaphoreSlim`. `RecalculateAsync` calculates on a thread-pool thread and holds
+it until it is done or cancelled, so give long calculations a `CancellationToken`.
 
 ## Building
 
@@ -177,6 +258,11 @@ are filled in.
 dotnet test Avig.Kalkyl.slnx
 ./publish.ps1          # tests, packs, checks the package shape, copies to the local feed
 ./release.ps1 -DryRun
+dotnet run --project tools/Avig.Kalkyl.Fuzz -c Release -- all --smoke   # fuzzing, see tools/Avig.Kalkyl.Fuzz
+tests/Avig.Kalkyl.Compatibility/download.ps1                            # real workbooks, compared with four other libraries
+dotnet test tests/Avig.Kalkyl.Compatibility
+tools/Avig.Kalkyl.Fuzz/corpus-check.ps1                                 # every fuzz input in its own process (stack, memory, hangs)
+dotnet run -c Release --project tools/Avig.Kalkyl.Benchmarks -- --filter *   # baseline in docs/benchmarks/baseline.md
 ```
 
 ## Licence
