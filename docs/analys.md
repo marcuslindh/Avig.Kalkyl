@@ -258,6 +258,11 @@ kolumnbredd, fryst rubrikrad, autofilter och en Excel-tabell från en lista.
 **Inte i version 1:** redigering av befintliga filer, bilder, diagram, villkorsstyrd formatering,
 lösenordsskydd, xls och formelberäkning.
 
+*Tillägg 2026-11-24:* redigering och formelberäkning kom i senare milstolpar. Diagram, bilder och
+villkorsstyrd formatering kan nu skapas med båda skrivarna och läggas till i öppnade filer (se
+README). De läses inte in som objekt: det som en öppnad fil redan har kopieras orört. Lösenordsskydd
+och xls är fortfarande utanför.
+
 ## Namn
 
 Alla nedan var lediga på nuget.org 2026-11-23.

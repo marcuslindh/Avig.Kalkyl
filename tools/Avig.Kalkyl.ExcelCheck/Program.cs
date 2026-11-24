@@ -51,6 +51,9 @@ internal static class Program
         }
 
         await RoundTripCompatibilityFilesAsync(output);
+        await WriteChartsWithWriterAsync(Path.Combine(output, "10-charts-writer.xlsx"));
+        await WriteChartsWithDocumentAsync(Path.Combine(output, "11-charts-document.xlsx"));
+        await AddToCompatibilityFilesAsync(output);
         await File.WriteAllLinesAsync(Path.Combine(output, "expected.txt"), Expected);
         Console.WriteLine($"Files in {output}. Open each in Excel and follow docs/excel-checklista.md; expected.txt has the values to compare.");
 
@@ -260,6 +263,244 @@ internal static class Program
         }
 
         Expected.Add($"09-roundtrip: {written} tutorial workbooks, opened, recalculated, one cell added under the last row of the first sheet ('Avig.Kalkyl', bold) and saved. Each must open without repair and look like the original in tests/Avig.Kalkyl.Compatibility/files: formatting, charts, tables, pivot tables, comments, names and data validation.");
+    }
+
+    private static readonly (string Month, double Income, double Cost)[] Months =
+    [
+        ("Jan", 120, 80), ("Feb", 180, 95), ("Mar", 240, 130), ("Apr", 90, 70), ("Maj", 310, 150), ("Jun", 205, 120),
+    ];
+
+    private static async Task WriteChartsWithWriterAsync(string path)
+    {
+        Result<XlsxWriter> created = await XlsxWriter.CreateAsync(path);
+        Check(created.IsSuccess(out XlsxWriter? writer), created.Error);
+        Picture picture = Gradient();
+
+        await using (writer)
+        {
+            Result<SheetWriter> added = await writer.AddSheetAsync("Data");
+            Check(added.IsSuccess(out SheetWriter? sheet), added.Error);
+            await sheet.WriteRowAsync([Cell.Of("Månad").Bold(), Cell.Of("Intäkt").Bold(), Cell.Of("Kostnad").Bold(), Cell.Of("Resultat").Bold()]);
+
+            for (int index = 0; index < Months.Length; index++)
+            {
+                (string month, double income, double cost) = Months[index];
+                string row = (index + 2).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                await sheet.WriteRowAsync([month, income, cost, Cell.FromFormula("B" + row + "-C" + row, CellValue.Number(income - cost))]);
+            }
+
+            AddRules(sheet.AddConditionalFormat);
+
+            foreach ((Chart chart, CellRange area) in Charts())
+            {
+                Result chartAdded = sheet.AddChart(chart, area);
+                Check(chartAdded.IsSuccess(out _, out _), "chart");
+            }
+
+            sheet.AddPicture(picture, "A10");
+            sheet.AddPicture(picture, "A16:C22");
+
+            Result<SheetWriter> report = await writer.AddSheetAsync("Rapport");
+            Check(report.IsSuccess(out SheetWriter? reportSheet), report.Error);
+            await reportSheet.WriteRowAsync(["Diagrammet nedan läser bladet Data."]);
+            Result crossAdded = reportSheet.AddChart(new Chart(ChartType.Column) { Title = "Resultat", Series = [new ChartSeries("Resultat", "Data!D2:D7", "Data!A2:A7", "#70AD47")] }, "A3:H18");
+            Check(crossAdded.IsSuccess(out _, out _), crossAdded.ToString());
+        }
+
+        Expected.Add("10-charts-writer.xlsx: sheet Data has seven charts in column F onwards, top to bottom: clustered column (title 'Intäkt och kostnad', axis titles 'Månad' and 'kr', blue Intäkt), stacked bar (legend below), line (orange, no legend), stacked area (legend on top), pie (title 'Andel', six coloured slices, legend left), doughnut, scatter (green points, Intäkt along x, Kostnad up). A 64×48 gradient picture at A10 at its own size and one stretched over A16:C22. Rules: B2:B7 green bold at 200 or more and a blue data bar; C2:C7 a red–yellow–green colour scale; D2:D7 arrows (3 arrows); rows where D is below 50 have a yellow fill (D2 and D5). Sheet Rapport: a green column chart of Data!D2:D7. Change B2 to 500: the charts follow and B2 turns green.");
+    }
+
+    private static async Task WriteChartsWithDocumentAsync(string path)
+    {
+        Workbook book = Workbook.Create();
+        Result<Worksheet> added = book.AddSheet("Data");
+        Check(added.IsSuccess(out Worksheet? sheet), added.Error);
+        sheet["A1"] = Cell.Of("Månad").Bold();
+        sheet["B1"] = Cell.Of("Intäkt").Bold();
+        sheet["C1"] = Cell.Of("Kostnad").Bold();
+        sheet["D1"] = Cell.Of("Resultat").Bold();
+
+        for (int index = 0; index < Months.Length; index++)
+        {
+            (string month, double income, double cost) = Months[index];
+            string row = (index + 2).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            sheet[index + 1, 0] = month;
+            sheet[index + 1, 1] = income;
+            sheet[index + 1, 2] = cost;
+            sheet.SetFormula(index + 1, 3, "B" + row + "-C" + row);
+        }
+
+        AddRules(sheet.AddConditionalFormat);
+
+        foreach ((Chart chart, CellRange area) in Charts())
+        {
+            Check(sheet.AddChart(chart, area).IsSuccess(out _, out _), "chart");
+        }
+
+        Picture picture = Gradient();
+        Check(sheet.AddPicture(picture, "A10").IsSuccess(out _, out _), "picture");
+        Check(sheet.AddPicture(picture, "A16:C22").IsSuccess(out _, out _), "picture");
+        await book.RecalculateAsync(RecalculationScope.All);
+        Check((await book.SaveAsync(path)).IsSuccess(out _, out _), "11");
+        Expected.Add("11-charts-document.xlsx: the same sheet Data as 10, written by the document model (no Rapport sheet).");
+    }
+
+    private static async Task AddToCompatibilityFilesAsync(string output)
+    {
+        if (TryFindCompatibilityFiles(out string? folder) == false)
+        {
+            Expected.Add("12: skipped, tests/Avig.Kalkyl.Compatibility/files is empty.");
+
+            return;
+        }
+
+        string target = Path.Combine(output, "12-added");
+        Directory.CreateDirectory(target);
+        Picture picture = Gradient();
+        int written = 0;
+
+        foreach (string file in Directory.GetFiles(folder, "*.xlsx").Order(StringComparer.Ordinal))
+        {
+            Result<Workbook> opened = await Workbook.OpenAsync(file);
+
+            if (opened.IsSuccess(out Workbook? book) == false || book.Sheets.Count == 0)
+            {
+                continue;
+            }
+
+            // Three numbers two rows under the sheet's last row, with a chart, a picture and a
+            // data bar of their own: added next to whatever drawings and rules the file has.
+            Worksheet first = book.Sheets[0];
+            int top = first.RowCount + 1;
+            first[top, 0] = Cell.Of("Avig.Kalkyl").Bold();
+
+            for (int index = 0; index < 3; index++)
+            {
+                first[top + 1 + index, 0] = "Värde " + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                first[top + 1 + index, 1] = 10 * (index + 1);
+            }
+
+            CellRange values = new(top + 1, 1, top + 3, 1);
+            CellRange labels = new(top + 1, 0, top + 3, 0);
+            Chart chart = new(ChartType.Column) { Title = "Avig.Kalkyl", Series = [new ChartSeries("Värde", values.ToString(), labels.ToString())] };
+
+            Result chartAdded = first.AddChart(chart, new CellRange(top, 3, top + 14, 9));
+            Result pictureAdded = first.AddPicture(picture, new CellAddress(top, 10));
+
+            if (chartAdded.IsSuccess(out _, out _) == false || pictureAdded.IsSuccess(out _, out _) == false)
+            {
+                // Strict OOXML: nothing is added, and that is what the result says.
+                continue;
+            }
+
+            first.AddConditionalFormat(values, ConditionalFormat.DataBar("#638EC6"));
+
+            if ((await book.SaveAsync(Path.Combine(target, Path.GetFileName(file)))).IsSuccess(out _, out _) == true)
+            {
+                written++;
+            }
+        }
+
+        Expected.Add($"12-added: {written} tutorial workbooks with, on the first sheet two rows under the last one: 'Avig.Kalkyl' in bold, three values 10, 20, 30 with blue data bars, a column chart of them titled 'Avig.Kalkyl' to their right and the gradient picture beside it. The file's own charts, pictures and conditional formatting must all still be there and look as in the original.");
+    }
+
+    private static void AddRules(Action<string, ConditionalFormat> add)
+    {
+        add("B2:B7", ConditionalFormat.WhenCell(ComparisonOperator.GreaterThanOrEqual, 200, new Style { Bold = true, FontColor = "#006100", Background = "#C6EFCE" }));
+        add("B2:B7", ConditionalFormat.DataBar("#638EC6"));
+        add("C2:C7", ConditionalFormat.ColorScale("#F8696B", "#FFEB84", "#63BE7B"));
+        add("D2:D7", ConditionalFormat.IconSet(IconSetKind.ThreeArrows));
+        add("A2:D7", ConditionalFormat.WhenFormula("$D2<50", new Style { Background = "#FFEB9C" }));
+    }
+
+    private static IEnumerable<(Chart Chart, CellRange Area)> Charts()
+    {
+        Chart[] charts =
+        [
+            new(ChartType.Column) { Title = "Intäkt och kostnad", CategoryAxisTitle = "Månad", ValueAxisTitle = "kr", Series = [new ChartSeries("Intäkt", "B2:B7", "A2:A7", "#4472C4"), new ChartSeries("Kostnad", "C2:C7", "A2:A7")] },
+            new(ChartType.Bar) { Stacked = true, Legend = LegendPosition.Bottom, Series = [new ChartSeries("Intäkt", "B2:B7", "A2:A7"), new ChartSeries("Kostnad", "C2:C7", "A2:A7")] },
+            new(ChartType.Line) { Legend = LegendPosition.None, Series = [new ChartSeries("Intäkt", "B2:B7", "A2:A7", "#ED7D31")] },
+            new(ChartType.Area) { Stacked = true, Legend = LegendPosition.Top, Series = [new ChartSeries("Intäkt", "B2:B7", "A2:A7"), new ChartSeries("Kostnad", "C2:C7", "A2:A7")] },
+            new(ChartType.Pie) { Title = "Andel", Legend = LegendPosition.Left, Series = [new ChartSeries("Intäkt", "B2:B7", "A2:A7")] },
+            new(ChartType.Doughnut) { Series = [new ChartSeries("Intäkt", "B2:B7", "A2:A7")] },
+            new(ChartType.Scatter) { CategoryAxisTitle = "Intäkt", ValueAxisTitle = "Kostnad", Series = [new ChartSeries("Månader", "C2:C7", "B2:B7", "#70AD47")] },
+        ];
+
+        for (int index = 0; index < charts.Length; index++)
+        {
+            yield return (charts[index], new CellRange(index * 17, 5, index * 17 + 15, 12));
+        }
+    }
+
+    /// <summary>
+    /// A 64×48 PNG with a colour gradient, made here so that the tool needs no image file: an
+    /// IHDR, one IDAT of zlib data and an IEND, each with its CRC.
+    /// </summary>
+    private static Picture Gradient()
+    {
+        const int width = 64;
+        const int height = 48;
+        using MemoryStream pixels = new();
+
+        using (ZLibStream zlib = new(pixels, CompressionLevel.Optimal, true))
+        {
+            for (int row = 0; row < height; row++)
+            {
+                zlib.WriteByte(0);
+
+                for (int column = 0; column < width; column++)
+                {
+                    zlib.WriteByte((byte)(column * 4));
+                    zlib.WriteByte((byte)(row * 5));
+                    zlib.WriteByte(200);
+                }
+            }
+        }
+
+        using MemoryStream png = new();
+        png.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        byte[] header = new byte[13];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header, width);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(4), height);
+        header[8] = 8;
+        header[9] = 2;
+        WriteChunk(png, "IHDR", header);
+        WriteChunk(png, "IDAT", pixels.ToArray());
+        WriteChunk(png, "IEND", []);
+        Result<Picture> picture = Picture.FromBytes(png.ToArray());
+        Check(picture.IsSuccess(out Picture? made), picture.Error);
+
+        return made with { Description = "Färgskala" };
+    }
+
+    private static void WriteChunk(Stream png, string type, byte[] data)
+    {
+        byte[] length = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, data.Length);
+        png.Write(length);
+        byte[] typeAndData = [.. Encoding.ASCII.GetBytes(type), .. data];
+        png.Write(typeAndData);
+        byte[] crc = new byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(crc, Crc32(typeAndData));
+        png.Write(crc);
+    }
+
+    private static uint Crc32(byte[] bytes)
+    {
+        uint crc = 0xFFFFFFFF;
+
+        foreach (byte value in bytes)
+        {
+            crc ^= value;
+
+            for (int bit = 0; bit < 8; bit++)
+            {
+                uint mask = (uint)-(int)(crc & 1);
+                crc = (crc >> 1) ^ (0xEDB88320 & mask);
+            }
+        }
+
+        return ~crc;
     }
 
     private static bool TryFindCompatibilityFiles([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? folder)

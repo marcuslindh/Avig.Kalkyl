@@ -14,6 +14,8 @@ public sealed class SheetWriter
     private readonly XmlWriter xml;
     private readonly Stream entryStream;
     private readonly Writing.StyleRegistry styles;
+    private readonly Func<string, bool> sheetExists;
+    private readonly SheetExtras extras = new();
     private readonly SortedDictionary<int, double> columnWidths = [];
     private int frozenRows;
     private int frozenColumns;
@@ -21,12 +23,13 @@ public sealed class SheetWriter
     private bool started;
     private int lastColumn = -1;
 
-    internal SheetWriter(string name, int index, Stream entryStream, Writing.StyleRegistry styles)
+    internal SheetWriter(string name, int index, Stream entryStream, Writing.StyleRegistry styles, Func<string, bool> sheetExists)
     {
         Name = name;
         Index = index;
         this.entryStream = entryStream;
         this.styles = styles;
+        this.sheetExists = sheetExists;
         xml = XmlWriter.Create(entryStream, XlsxWriter.XmlSettings);
     }
 
@@ -46,6 +49,11 @@ public sealed class SheetWriter
 
     /// <summary>The bottom-right corner of the autofilter, which always starts at A1. Set when the sheet is finished.</summary>
     internal CellAddress? AutoFilterEnd { get; private set; }
+
+    internal SheetExtras Extras => extras;
+
+    /// <summary>The relationship from the sheet to its drawing part, when it has charts or pictures.</summary>
+    internal const string DrawingRelationshipId = "rId1";
 
     /// <summary>Sets the width of a column, in characters of the default font. Must come before the first row.</summary>
     /// <param name="column">The column, 0-based.</param>
@@ -82,6 +90,100 @@ public sealed class SheetWriter
     {
         ThrowIfFinished();
         autoFilter = true;
+    }
+
+    /// <summary>
+    /// Adds a conditional format to a range. Can be called at any time before the sheet is
+    /// finished; the rule covers the cells whether they are written before or after.
+    /// </summary>
+    /// <param name="range">The cells, for example <c>B2:B100</c>.</param>
+    /// <param name="format">The rule.</param>
+    public void AddConditionalFormat(CellRange range, ConditionalFormat format)
+    {
+        ThrowIfFinished();
+        extras.AddConditionalFormat(range, format);
+    }
+
+    /// <summary>Adds a conditional format to a range given in A1 notation, such as <c>B2:B100</c>.</summary>
+    /// <param name="range">The cells.</param>
+    /// <param name="format">The rule.</param>
+    public void AddConditionalFormat(string range, ConditionalFormat format)
+    {
+        AddConditionalFormat(ParseRange(range), format);
+    }
+
+    /// <summary>
+    /// Adds a chart over a block of cells. Can be called at any time before the sheet is finished.
+    /// The series may refer to this sheet and to the sheets added before it.
+    /// </summary>
+    /// <param name="chart">The chart.</param>
+    /// <param name="area">The cells the chart covers, for example <c>E2:L20</c>.</param>
+    /// <returns>Success, or NotFound when a series refers to a sheet the workbook does not have yet.</returns>
+    public Result AddChart(Chart chart, CellRange area)
+    {
+        ThrowIfFinished();
+
+        return extras.AddChart(chart, area, Name, sheetExists);
+    }
+
+    /// <summary>Adds a chart over a block of cells given in A1 notation, such as <c>E2:L20</c>.</summary>
+    /// <param name="chart">The chart.</param>
+    /// <param name="area">The cells the chart covers.</param>
+    /// <returns>Success, or NotFound when a series refers to a sheet the workbook does not have yet.</returns>
+    public Result AddChart(Chart chart, string area)
+    {
+        return AddChart(chart, ParseRange(area));
+    }
+
+    /// <summary>Puts a picture with its top-left corner at a cell, at its own size times <paramref name="scale"/>.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="topLeft">The cell.</param>
+    /// <param name="scale">1 for the picture's own size (96 pixels to the inch), 0.5 for half.</param>
+    public void AddPicture(Picture picture, CellAddress topLeft, double scale = 1)
+    {
+        ThrowIfFinished();
+        extras.AddPicture(picture, topLeft, scale);
+    }
+
+    /// <summary>Puts a picture over a block of cells, stretched to fill it.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="area">The cells.</param>
+    public void AddPicture(Picture picture, CellRange area)
+    {
+        ThrowIfFinished();
+        extras.AddPicture(picture, area);
+    }
+
+    /// <summary>
+    /// Puts a picture at a cell such as <c>B2</c>, at its own size, or over a range such as
+    /// <c>B2:F12</c>, stretched to fill it.
+    /// </summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="reference">The cell or the range.</param>
+    public void AddPicture(Picture picture, string reference)
+    {
+        CellRange range = ParseRange(reference);
+
+        if (reference.Contains(':', StringComparison.Ordinal) == true)
+        {
+            AddPicture(picture, range);
+        }
+        else
+        {
+            AddPicture(picture, range.First);
+        }
+    }
+
+    internal static CellRange ParseRange(string reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+
+        if (CellRange.TryParse(reference, out CellRange range) == false)
+        {
+            throw new ArgumentException($"'{reference}' is not a cell range. Expected a range such as B2:D10.", nameof(reference));
+        }
+
+        return range;
     }
 
     /// <summary>Writes the next row. Cell <c>i</c> in the list goes in column <c>i</c>; empty cells are skipped.</summary>
@@ -152,6 +254,16 @@ public sealed class SheetWriter
             CellAddress end = new(RowCount - 1, lastColumn);
             AutoFilterEnd = end;
             await SheetXml.WriteAutoFilterAsync(xml, end);
+        }
+
+        if (extras.ConditionalFormats.Count > 0)
+        {
+            await ConditionalFormatXml.WriteAsync(xml, extras.ConditionalFormats, styles, 1);
+        }
+
+        if (extras.Drawings.Count > 0)
+        {
+            await DrawingXml.WriteSheetDrawingAsync(xml, DrawingRelationshipId);
         }
 
         await xml.WriteEndElementAsync();

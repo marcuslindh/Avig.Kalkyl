@@ -1,8 +1,9 @@
 # Checklista: öppna filerna i riktiga Excel
 
 Testfall FUN-04 i `docs/testplan.md`. Byggmaskinen har inte Excel, så det här är det enda
-testet som en person gör. Det tar cirka 30 minuter. Gör det före en release och efter
-ändringar i `DocumentSaver`, `XlsxWriter` eller `Internal/CellXml.cs`.
+testet som en person gör. Det tar cirka 40 minuter. Gör det före en release och efter
+ändringar i `DocumentSaver`, `XlsxWriter`, `Internal/CellXml.cs` eller ritningarna och reglerna
+(`DrawingXml`, `DrawingPackage`, `ConditionalFormatXml`).
 
 ## 1. Skapa filerna
 
@@ -42,6 +43,9 @@ För **varje** fil gäller:
 | `06-edge-values.xlsx` | 32 767 tecken i A1, och B1 visar 32767. Det största talet. Datumet 9999-12-31. `[h]:mm:ss` över ett dygn. Radbrytning, emoji. Ctrl+End går till XFD1048576. | ☐ |
 | `07-macros-kept.xlsm` | Excel frågar om makron ska aktiveras, och makrona fungerar som i originalet. | ☐ |
 | `08-macros-removed.xlsx` | Ingen makrovarning. Utvecklare > Visual Basic visar inget projekt för filen. | ☐ |
+| `10-charts-writer.xlsx` | Sju diagram på bladet Data: stapel, liggande stapel (staplad), linje, yta (staplad), cirkel, ring och punkt, med titlar, axeltitlar och förklaringar som i `expected.txt`. Bilden i A10 i sin egen storlek och utsträckt över A16:C22. Reglerna i B, C och D och den gula fyllningen på raderna där D är under 50. Ändra B2 till 500: diagrammen följer med och B2 blir grön. Bladet Rapport har ett diagram över Data. | ☐ |
+| `11-charts-document.xlsx` | Samma blad Data som 10, skrivet av dokumentmodellen. | ☐ |
+| `12-added\*.xlsx` | Två rader under sista raden på första bladet: tre värden med blå datastaplar, ett stapeldiagram över dem och bilden. Filens egna diagram, bilder och regler finns kvar och ser ut som i originalet. | ☐ |
 | `09-roundtrip\*.xlsx` | Jämför med originalet i `tests/Avig.Kalkyl.Compatibility/files`: formatering, diagram, tabeller, pivottabeller, utsnitt, kommentarer, namn och dataverifiering. På första bladet finns en ny fet cell, "Avig.Kalkyl", under sista raden. | ☐ |
 
 För `09-roundtrip` räcker det att öppna alla 38 filer och se att ingen ger en dialogruta. Jämför

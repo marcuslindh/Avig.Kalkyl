@@ -9,6 +9,7 @@ namespace Avig.Kalkyl;
 public sealed class Worksheet
 {
     private readonly RowTable rows = new();
+    private readonly SheetExtras extras = new();
     private List<ColumnRange> columns;
     private int frozenRows;
     private int frozenColumns;
@@ -332,6 +333,136 @@ public sealed class Worksheet
         frozenColumns = columns;
         ViewChanged = true;
         Workbook.MarkChanged();
+    }
+
+    /// <summary>
+    /// Adds a conditional format to a range. Rules the file already has are kept as they are, and
+    /// win over the new ones where both apply.
+    /// </summary>
+    /// <param name="range">The cells, for example <c>B2:B100</c>.</param>
+    /// <param name="format">The rule.</param>
+    public void AddConditionalFormat(CellRange range, ConditionalFormat format)
+    {
+        extras.AddConditionalFormat(range, format);
+        Workbook.MarkChanged();
+    }
+
+    /// <summary>Adds a conditional format to a range given in A1 notation, such as <c>B2:B100</c>.</summary>
+    /// <param name="range">The cells.</param>
+    /// <param name="format">The rule.</param>
+    public void AddConditionalFormat(string range, ConditionalFormat format)
+    {
+        AddConditionalFormat(SheetWriter.ParseRange(range), format);
+    }
+
+    /// <summary>
+    /// Adds a chart over a block of cells. Charts and pictures the file already has are kept.
+    /// The series may refer to any sheet in the workbook.
+    /// </summary>
+    /// <param name="chart">The chart.</param>
+    /// <param name="area">The cells the chart covers, for example <c>E2:L20</c>.</param>
+    /// <returns>
+    /// Success; NotFound when a series refers to a sheet the workbook does not have; Invalid
+    /// when the file is Strict OOXML, which the package does not add drawings to.
+    /// </returns>
+    public Result AddChart(Chart chart, CellRange area)
+    {
+        ArgumentNullException.ThrowIfNull(chart);
+
+        if (CheckDrawable().IsFailure(out string? error, out ResultStatus status) == true)
+        {
+            return Result.Failure(error, status);
+        }
+
+        Result added = extras.AddChart(chart, area, Name, name => Workbook.Sheet(name).IsSuccess(out _) == true);
+
+        if (added.IsSuccess(out _, out _) == true)
+        {
+            Workbook.MarkChanged();
+        }
+
+        return added;
+    }
+
+    /// <summary>Adds a chart over a block of cells given in A1 notation, such as <c>E2:L20</c>.</summary>
+    /// <param name="chart">The chart.</param>
+    /// <param name="area">The cells the chart covers.</param>
+    /// <returns>As <see cref="AddChart(Chart, CellRange)"/>.</returns>
+    public Result AddChart(Chart chart, string area)
+    {
+        return AddChart(chart, SheetWriter.ParseRange(area));
+    }
+
+    /// <summary>Puts a picture with its top-left corner at a cell, at its own size times <paramref name="scale"/>.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="topLeft">The cell.</param>
+    /// <param name="scale">1 for the picture's own size (96 pixels to the inch), 0.5 for half.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddPicture(Picture picture, CellAddress topLeft, double scale = 1)
+    {
+        ArgumentNullException.ThrowIfNull(picture);
+        Result drawable = CheckDrawable();
+
+        if (drawable.IsSuccess(out _, out _) == true)
+        {
+            extras.AddPicture(picture, topLeft, scale);
+            Workbook.MarkChanged();
+        }
+
+        return drawable;
+    }
+
+    /// <summary>Puts a picture over a block of cells, stretched to fill it.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="area">The cells.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddPicture(Picture picture, CellRange area)
+    {
+        ArgumentNullException.ThrowIfNull(picture);
+        Result drawable = CheckDrawable();
+
+        if (drawable.IsSuccess(out _, out _) == true)
+        {
+            extras.AddPicture(picture, area);
+            Workbook.MarkChanged();
+        }
+
+        return drawable;
+    }
+
+    /// <summary>
+    /// Puts a picture at a cell such as <c>B2</c>, at its own size, or over a range such as
+    /// <c>B2:F12</c>, stretched to fill it.
+    /// </summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="reference">The cell or the range.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddPicture(Picture picture, string reference)
+    {
+        CellRange range = SheetWriter.ParseRange(reference);
+
+        if (reference.Contains(':', StringComparison.Ordinal) == true)
+        {
+            return AddPicture(picture, range);
+        }
+
+        return AddPicture(picture, range.First);
+    }
+
+    internal SheetExtras Extras => extras;
+
+    /// <summary>
+    /// A Strict OOXML file has its own namespaces for drawings and charts as well. Parts written
+    /// with the transitional ones would make a package that is neither, so none are added.
+    /// </summary>
+    private Result CheckDrawable()
+    {
+        if (Source is not null && string.Equals(Source.Namespace, Ooxml.SpreadsheetNamespace, StringComparison.Ordinal) == false)
+        {
+            return Result.Invalid($"The sheet '{Name}' is in a Strict OOXML file. Charts and pictures can be added to transitional files only; save it as an ordinary .xlsx in Excel first.");
+        }
+
+        return Result.Success();
     }
 
     /// <summary>Stores a cell read from the file, with its original XML so that it is written back unchanged.</summary>

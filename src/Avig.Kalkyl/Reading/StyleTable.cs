@@ -47,6 +47,9 @@ internal sealed class StyleTable
     /// <summary>The highest number format id in use, built-in or custom.</summary>
     public int MaxFormatId { get; }
 
+    /// <summary>The number of differential formats (dxf), which conditional formatting and tables refer to by index.</summary>
+    public int DifferentialFormatCount { get; private init; }
+
     public bool IsDate(int index)
     {
         return index >= 0 && index < dates.Length && dates[index] == true;
@@ -68,6 +71,7 @@ internal sealed class StyleTable
         List<FontInfo> fonts = [];
         List<string?> fills = [];
         List<FormatInfo> cellFormats = [];
+        int differentialFormats = 0;
         await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
         using XmlReader reader = XmlParts.CreateReader(stream);
         string section = string.Empty;
@@ -97,7 +101,7 @@ internal sealed class StyleTable
 
                     break;
 
-                case "fonts" or "fills" or "cellXfs" when reader.IsEmptyElement == false:
+                case "fonts" or "fills" or "cellXfs" or "dxfs" when reader.IsEmptyElement == false:
                     section = reader.LocalName;
                     sectionDepth = reader.Depth;
 
@@ -117,13 +121,18 @@ internal sealed class StyleTable
                     cellFormats.Add(await ReadCellFormatAsync(reader));
 
                     break;
+
+                case "dxf" when section == "dxfs" && reader.Depth == sectionDepth + 1:
+                    differentialFormats++;
+
+                    break;
             }
         }
 
-        return Build(customFormats, fonts, fills, cellFormats);
+        return Build(customFormats, fonts, fills, cellFormats, differentialFormats);
     }
 
-    private static StyleTable Build(Dictionary<int, string> customFormats, List<FontInfo> fonts, List<string?> fills, List<FormatInfo> cellFormats)
+    private static StyleTable Build(Dictionary<int, string> customFormats, List<FontInfo> fonts, List<string?> fills, List<FormatInfo> cellFormats, int differentialFormats)
     {
         Style[] styles = new Style[cellFormats.Count];
         bool[] dates = new bool[cellFormats.Count];
@@ -199,7 +208,7 @@ internal sealed class StyleTable
             styles[index] = Intern(style);
         }
 
-        return new StyleTable(styles, dates, fonts.Count, fills.Count, maxFormatId, baseFont.Name ?? "Calibri", baseFont.Size ?? 11);
+        return new StyleTable(styles, dates, fonts.Count, fills.Count, maxFormatId, baseFont.Name ?? "Calibri", baseFont.Size ?? 11) { DifferentialFormatCount = differentialFormats };
     }
 
     /// <summary>The unstyled style shares the one <see cref="Style.Default"/> instance.</summary>

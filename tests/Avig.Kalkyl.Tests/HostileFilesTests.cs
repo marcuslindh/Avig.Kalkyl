@@ -63,6 +63,37 @@ public class HostileFilesTests
         return TestFiles.Package([.. parts]);
     }
 
+    [Theory]
+    [InlineData("inte XML alls")]
+    [InlineData("<wsDr><a><a><a>")]
+    [InlineData("deep")]
+    public async Task A_damaged_drawing_that_a_picture_is_added_to_is_a_damaged_file(string drawing)
+    {
+        if (drawing == "deep")
+        {
+            drawing = "<wsDr>" + string.Concat(Enumerable.Repeat("<x>", 500)) + string.Concat(Enumerable.Repeat("</x>", 500)) + "</wsDr>";
+        }
+
+        List<(string Path, string Content)> parts = Parts(Sheet(OneCell, "<drawing xmlns:r=\"" + Relationships + "\" r:id=\"rId1\"/>"));
+        parts.Add(("xl/worksheets/_rels/sheet1.xml.rels", $"""<Relationships xmlns="{PackageRelationships}"><Relationship Id="rId1" Type="{Relationships}/drawing" Target="../drawings/drawing1.xml"/></Relationships>"""));
+        parts.Add(("xl/drawings/drawing1.xml", drawing));
+        await using MemoryStream file = File(parts);
+
+        // The drawing is not read when the file is opened, only copied when it is saved.
+        Result<Workbook> opened = await Workbook.OpenAsync(file);
+        Assert.True(opened.IsSuccess(out Workbook? book), opened.Error);
+        Assert.True(book.Sheets[0].AddPicture(DrawingTests.PngPicture(), "B2").IsSuccess(out _, out _));
+
+        await using MemoryStream saved = new();
+        InvalidDataException damaged = await Assert.ThrowsAsync<InvalidDataException>(() => book.SaveAsync(saved));
+        Assert.Equal(KalkylErrorKind.Damaged, damaged.ErrorKind());
+
+        // Saved to a path, nothing is left behind: the file is built in memory first.
+        string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".xlsx");
+        await Assert.ThrowsAsync<InvalidDataException>(() => book.SaveAsync(path));
+        Assert.False(System.IO.File.Exists(path));
+    }
+
     /// <summary>The kinds a refused hostile file may have: every refusal must be one an application can show.</summary>
     private static readonly KalkylErrorKind[] Refusals = [KalkylErrorKind.Damaged, KalkylErrorKind.TooLarge, KalkylErrorKind.NotXlsx];
 

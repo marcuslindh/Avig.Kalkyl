@@ -57,20 +57,29 @@ internal static class DocumentSaver
         }
 
         List<NewSheet> parts = [];
+        DrawingPackage drawings = new(archive, []);
 
         foreach (Worksheet sheet in sheets)
         {
             string number = SheetXml.Text(sheet.Index + 1);
             NewSheet part = new(sheet, "xl/worksheets/sheet" + number + ".xml", "worksheets/sheet" + number + ".xml", "rId" + number, sheet.Index + 1);
             parts.Add(part);
-            await WritePartAsync(archive, part.Path, xml => WriteNewSheetAsync(xml, sheet, styles, sheet.Index == 0, false), cancellationToken);
+            (bool hasDrawing, string id) = await WriteNewSheetDrawingAsync(archive, drawings, sheet, part.Path, cancellationToken);
+            string? drawingId = null;
+
+            if (hasDrawing == true)
+            {
+                drawingId = id;
+            }
+
+            await WritePartAsync(archive, part.Path, xml => WriteNewSheetAsync(xml, sheet, styles, sheet.Index == 0, false, drawingId), cancellationToken);
         }
 
         await WritePartAsync(archive, "xl/styles.xml", styles.WriteAsync, cancellationToken);
         await WritePartAsync(archive, "xl/workbook.xml", xml => WriteNewWorkbookAsync(xml, book, parts), cancellationToken);
         string stylesId = "rId" + SheetXml.Text(parts.Count + 1);
         await WritePartAsync(archive, "xl/_rels/workbook.xml.rels", xml => WriteNewWorkbookRelationshipsAsync(xml, parts, stylesId), cancellationToken);
-        await WritePartAsync(archive, "[Content_Types].xml", xml => WriteNewContentTypesAsync(xml, parts), cancellationToken);
+        await WritePartAsync(archive, "[Content_Types].xml", xml => WriteNewContentTypesAsync(xml, parts, drawings), cancellationToken);
         await WritePartAsync(archive, "_rels/.rels", WriteRootRelationshipsAsync, cancellationToken);
     }
 
@@ -97,13 +106,40 @@ internal static class DocumentSaver
         int nextSheetId = book.Sheets.Where(sheet => sheet.Source is not null).Select(sheet => sheet.Source!.SheetId).DefaultIfEmpty(0).Max() + 1;
         string workbookFolder = Folder(workbookPath);
         bool hasFormulas = book.Sheets.Any(sheet => sheet.RowEntries.Values.Any(row => row.Cells.Values.Any(cell => cell.Cell.Formula is not null)));
+        DrawingPackage drawings = new(archive, partPaths);
 
         foreach (Worksheet sheet in book.Sheets)
         {
             if (sheet.Source is SheetSource source && XmlParts.TryFindEntry(original, source.Path, out ZipArchiveEntry? sheetEntry) == true)
             {
                 written.Add(sheetEntry.FullName);
-                await WritePartAsync(archive, sheetEntry.FullName, xml => WritePatchedSheetAsync(xml, sheetEntry, sheet, styles, book.Uses1904Dates, cancellationToken), cancellationToken);
+                string? drawingId = null;
+
+                if (sheet.Extras.Drawings.Count > 0)
+                {
+                    string sheetPath = sheetEntry.FullName.Replace('\\', '/');
+
+                    // The sheet's .rels and its drawing are read for the first time here.
+                    try
+                    {
+                        (string? openedId, string[] drawingParts) = await WriteOpenedSheetDrawingAsync(original, archive, drawings, sheetPath, sheet.Extras.Drawings, cancellationToken);
+                        drawingId = openedId;
+                        written.UnionWith(drawingParts);
+                    }
+                    catch (XmlException exception)
+                    {
+                        throw new InvalidDataException($"{KalkylError.DamagedPrefix}: the relationships or the drawing of {sheetPath} are not valid XML ({exception.Message}), so nothing can be added to them.", exception);
+                    }
+                }
+
+                int firstPriority = 1;
+
+                if (sheet.Extras.ConditionalFormats.Count > 0)
+                {
+                    firstPriority = await MaxPriorityAsync(sheetEntry, cancellationToken) + 1;
+                }
+
+                await WritePartAsync(archive, sheetEntry.FullName, xml => WritePatchedSheetAsync(xml, sheetEntry, sheet, styles, book.Uses1904Dates, drawingId, firstPriority, cancellationToken), cancellationToken);
 
                 continue;
             }
@@ -130,7 +166,16 @@ internal static class DocumentSaver
             nextSheetId++;
             added.Add(part);
             written.Add(part.Path);
-            await WritePartAsync(archive, part.Path, xml => WriteNewSheetAsync(xml, sheet, styles, false, book.Uses1904Dates), cancellationToken);
+            (bool hasDrawing, string id) = await WriteNewSheetDrawingAsync(archive, drawings, sheet, part.Path, cancellationToken);
+            string? newDrawingId = null;
+
+            if (hasDrawing == true)
+            {
+                newDrawingId = id;
+                written.Add(Ooxml.RelationshipsPath(part.Path));
+            }
+
+            await WritePartAsync(archive, part.Path, xml => WriteNewSheetAsync(xml, sheet, styles, false, book.Uses1904Dates, newDrawingId), cancellationToken);
         }
 
         string? addedStylesId = null;
@@ -164,7 +209,7 @@ internal static class DocumentSaver
         XmlParts.TryFindEntry(original, workbookPath, out ZipArchiveEntry? workbookEntry);
         await WritePartAsync(archive, workbookPath, xml => WritePatchedWorkbookAsync(xml, workbookEntry!, book, added, hasFormulas, cancellationToken), cancellationToken);
         await WritePartAsync(archive, workbookRelsPath, xml => WritePatchedWorkbookRelationshipsAsync(xml, original, workbookRelsPath, added, addedStylesId, book.RemovingMacros, cancellationToken), cancellationToken);
-        await WritePartAsync(archive, "[Content_Types].xml", xml => WritePatchedContentTypesAsync(xml, original, book, workbookPath, added, calcChainPath, addedStylesId is not null, stylesPath, cancellationToken), cancellationToken);
+        await WritePartAsync(archive, "[Content_Types].xml", xml => WritePatchedContentTypesAsync(xml, original, book, workbookPath, added, calcChainPath, addedStylesId is not null, stylesPath, drawings, cancellationToken), cancellationToken);
 
         foreach (ZipArchiveEntry entry in original.Entries)
         {
@@ -233,7 +278,90 @@ internal static class DocumentSaver
         return (stylesPath, calcChainPath, ids, paths);
     }
 
-    private static async Task WriteNewSheetAsync(XmlWriter xml, Worksheet sheet, StyleRegistry styles, bool selected, bool uses1904)
+    /// <summary>
+    /// The drawing of a sheet the package writes from scratch, and the sheet's .rels pointing to
+    /// it, when the sheet has drawings. Returns the relationship id for &lt;drawing&gt;.
+    /// </summary>
+    private static async Task<(bool Written, string Id)> WriteNewSheetDrawingAsync(ZipArchive archive, DrawingPackage drawings, Worksheet sheet, string sheetPath, CancellationToken cancellationToken)
+    {
+        if (sheet.Extras.Drawings.Count == 0)
+        {
+            return (false, string.Empty);
+        }
+
+        string drawingPath = await drawings.WriteDrawingAsync(sheet.Extras.Drawings, cancellationToken);
+        (string, string, string)[] relationships = [("rId1", DrawingXml.DrawingRelationship, "/" + drawingPath)];
+        await WritePartAsync(archive, Ooxml.RelationshipsPath(sheetPath), xml => DrawingXml.WriteRelationshipsAsync(xml, relationships), cancellationToken);
+
+        return (true, "rId1");
+    }
+
+    /// <summary>
+    /// The new drawings of an opened sheet. A sheet that has a drawing already gets the new
+    /// anchors added to it, since a sheet has at most one; the sheet itself is then unchanged
+    /// and the id is null. Otherwise a new drawing part is added to the sheet's .rels, and the
+    /// id is what &lt;drawing&gt; must refer to. Also returns the parts written in place of the
+    /// original ones.
+    /// </summary>
+    private static async Task<(string? Id, string[] Written)> WriteOpenedSheetDrawingAsync(ZipArchive original, ZipArchive archive, DrawingPackage drawings, string sheetPath, IReadOnlyList<DrawingItem> items, CancellationToken cancellationToken)
+    {
+        string relsPath = Ooxml.RelationshipsPath(sheetPath);
+        Dictionary<string, (string Type, string Target)> relationships = await XmlParts.ReadRelationshipsAsync(original, relsPath, cancellationToken);
+
+        foreach ((string type, string target) in relationships.Values)
+        {
+            if (Ooxml.IsRelationship(type, "drawing") == true && XmlParts.TryFindEntry(original, Ooxml.ResolveTarget(sheetPath, target), out ZipArchiveEntry? drawing) == true)
+            {
+                return (null, await drawings.AppendToDrawingAsync(original, drawing, items, cancellationToken));
+            }
+        }
+
+        string drawingPath = await drawings.WriteDrawingAsync(items, cancellationToken);
+        HashSet<string> ids = await DrawingPackage.ReadRelationshipIdsAsync(original, relsPath, cancellationToken);
+        string id = DrawingPackage.NextId(ids);
+        (string, string, string)[] added = [(id, DrawingXml.DrawingRelationship, "/" + drawingPath)];
+
+        await WritePartAsync(archive, relsPath, async xml =>
+        {
+            await xml.WriteStartDocumentAsync(true);
+            await xml.WriteStartElementAsync(null, "Relationships", Ooxml.PackageRelationshipsNamespace);
+            await DrawingPackage.CopyRelationshipsAsync(original, relsPath, xml, cancellationToken);
+            await DrawingXml.WriteRelationshipElementsAsync(xml, added);
+            await xml.WriteEndElementAsync();
+            await xml.WriteEndDocumentAsync();
+        }, cancellationToken);
+
+        return (id, [relsPath]);
+    }
+
+    /// <summary>The highest priority of the sheet's conditional formatting rules, extensions (x14) included; 0 when it has none.</summary>
+    private static async Task<int> MaxPriorityAsync(ZipArchiveEntry sheetEntry, CancellationToken cancellationToken)
+    {
+        int max = 0;
+        await using Stream stream = await XmlParts.OpenEntryAsync(sheetEntry, cancellationToken);
+        using XmlReader reader = XmlParts.CreateReader(stream);
+
+        while (await reader.ReadAsync() == true)
+        {
+            if (XmlParts.IsElement(reader, "sheetData") == true)
+            {
+                // The cells are most of a sheet and hold no rules.
+                await reader.SkipAsync();
+
+                continue;
+            }
+
+            if (XmlParts.IsElement(reader, "cfRule") == true
+                && int.TryParse(reader.GetAttribute("priority"), NumberStyles.None, CultureInfo.InvariantCulture, out int priority) == true)
+            {
+                max = Math.Max(max, priority);
+            }
+        }
+
+        return max;
+    }
+
+    private static async Task WriteNewSheetAsync(XmlWriter xml, Worksheet sheet, StyleRegistry styles, bool selected, bool uses1904, string? drawingId)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "worksheet", Ooxml.SpreadsheetNamespace);
@@ -247,11 +375,21 @@ internal static class DocumentSaver
             await SheetXml.WriteAutoFilterAsync(xml, end);
         }
 
+        if (sheet.Extras.ConditionalFormats.Count > 0)
+        {
+            await ConditionalFormatXml.WriteAsync(xml, sheet.Extras.ConditionalFormats, styles, 1);
+        }
+
+        if (drawingId is not null)
+        {
+            await DrawingXml.WriteSheetDrawingAsync(xml, drawingId);
+        }
+
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WritePatchedSheetAsync(XmlWriter xml, ZipArchiveEntry entry, Worksheet sheet, StyleRegistry styles, bool uses1904, CancellationToken cancellationToken)
+    private static async Task WritePatchedSheetAsync(XmlWriter xml, ZipArchiveEntry entry, Worksheet sheet, StyleRegistry styles, bool uses1904, string? drawingId, int firstPriority, CancellationToken cancellationToken)
     {
         SheetSource source = sheet.Source!;
         await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
@@ -285,7 +423,22 @@ internal static class DocumentSaver
             replacements["autoFilter"] = () => WriteFilterAsync(xml, sheet);
         }
 
-        HashSet<string> owned = [.. replacements.Keys];
+        if (drawingId is not null)
+        {
+            replacements["drawing"] = () => DrawingXml.WriteSheetDrawingAsync(xml, drawingId);
+        }
+
+        // New rules go after the sheet's own: they are pending like the replacements, so they are
+        // written in schema order with them, but the original elements of that name are kept.
+        HashSet<string> insertOnly = new(StringComparer.Ordinal);
+
+        if (sheet.Extras.ConditionalFormats.Count > 0)
+        {
+            replacements["conditionalFormatting"] = () => ConditionalFormatXml.WriteAsync(xml, sheet.Extras.ConditionalFormats, styles, firstPriority);
+            insertOnly.Add("conditionalFormatting");
+        }
+
+        HashSet<string> owned = [.. replacements.Keys.Where(key => insertOnly.Contains(key) == false)];
 
         if (reader.IsEmptyElement == false)
         {
@@ -311,7 +464,7 @@ internal static class DocumentSaver
                     await WritePendingBeforeAsync(replacements, SheetXml.OrderOf(name), SheetXml.OrderOf);
                 }
 
-                if (replacements.Remove(name, out Func<Task>? replacement) == true)
+                if (insertOnly.Contains(name) == false && replacements.Remove(name, out Func<Task>? replacement) == true)
                 {
                     await replacement();
                     await reader.SkipAsync();
@@ -776,10 +929,11 @@ internal static class DocumentSaver
         await xml.WriteEndElementAsync();
     }
 
-    private static async Task WritePatchedContentTypesAsync(XmlWriter xml, ZipArchive original, Workbook book, string workbookPath, List<NewSheet> added, string? calcChainPath, bool addStyles, string? stylesPath, CancellationToken cancellationToken)
+    private static async Task WritePatchedContentTypesAsync(XmlWriter xml, ZipArchive original, Workbook book, string workbookPath, List<NewSheet> added, string? calcChainPath, bool addStyles, string? stylesPath, DrawingPackage drawings, CancellationToken cancellationToken)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Types", Ooxml.ContentTypesNamespace);
+        HashSet<string> defaults = new(StringComparer.OrdinalIgnoreCase);
         string? calcChainPart = null;
 
         if (calcChainPath is not null)
@@ -823,7 +977,9 @@ internal static class DocumentSaver
 
                 if (reader.LocalName == "Default")
                 {
-                    await xml.WriteAttributeStringAsync(null, "Extension", null, reader.GetAttribute("Extension") ?? string.Empty);
+                    string extension = reader.GetAttribute("Extension") ?? string.Empty;
+                    defaults.Add(extension);
+                    await xml.WriteAttributeStringAsync(null, "Extension", null, extension);
                 }
                 else
                 {
@@ -841,6 +997,7 @@ internal static class DocumentSaver
             // back as it was, Excel could not open it, so the package's own parts are declared.
             await WriteDefaultAsync(xml, "rels", Ooxml.RelationshipsContentType);
             await WriteDefaultAsync(xml, "xml", "application/xml");
+            defaults.UnionWith(["rels", "xml"]);
             await WriteOverrideAsync(xml, "/" + workbookPath, Ooxml.WorkbookContentType);
 
             foreach (Worksheet sheet in book.Sheets.Where(sheet => sheet.Source is not null))
@@ -869,6 +1026,20 @@ internal static class DocumentSaver
             await WriteOverrideAsync(xml, "/" + stylesPath, Ooxml.StylesContentType);
         }
 
+        // A second Default for an extension makes the package invalid, so only missing ones are added.
+        foreach ((string extension, string contentType) in drawings.ImageTypes)
+        {
+            if (defaults.Contains(extension) == false)
+            {
+                await WriteDefaultAsync(xml, extension, contentType);
+            }
+        }
+
+        foreach ((string partName, string contentType) in drawings.Overrides)
+        {
+            await WriteOverrideAsync(xml, partName, contentType);
+        }
+
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
     }
@@ -888,12 +1059,12 @@ internal static class DocumentSaver
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WriteNewContentTypesAsync(XmlWriter xml, List<NewSheet> parts)
+    private static async Task WriteNewContentTypesAsync(XmlWriter xml, List<NewSheet> parts, DrawingPackage drawings)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Types", Ooxml.ContentTypesNamespace);
 
-        foreach ((string extension, string contentType) in new[] { ("rels", Ooxml.RelationshipsContentType), ("xml", "application/xml") })
+        foreach ((string extension, string contentType) in new[] { ("rels", Ooxml.RelationshipsContentType), ("xml", "application/xml") }.Concat(drawings.ImageTypes.Select(pair => (pair.Key, pair.Value))))
         {
             await xml.WriteStartElementAsync(null, "Default", null);
             await xml.WriteAttributeStringAsync(null, "Extension", null, extension);
@@ -909,6 +1080,12 @@ internal static class DocumentSaver
         }
 
         await WriteOverrideAsync(xml, "/xl/styles.xml", Ooxml.StylesContentType);
+
+        foreach ((string partName, string contentType) in drawings.Overrides)
+        {
+            await WriteOverrideAsync(xml, partName, contentType);
+        }
+
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
     }

@@ -63,6 +63,10 @@ public class RoundTripTests
             await customers.WriteRowAsync([Cell.Of("Summa").Bold(), Cell.Empty, Cell.FromFormula("=SUM(C2:C3)", 1229.5).Bold()]);
             await customers.WriteRowAsync([]);
             await customers.WriteRowAsync([Cell.Of("Arial 14").Font("Arial").FontSize(14), true, CellValue.Error("#N/A"), Cell.FromFormula("A1&\"!\"")]);
+            customers.AddConditionalFormat("C2:C4", ConditionalFormat.WhenCell(ComparisonOperator.LessThan, 0, new Style { FontColor = "#9C0006", Background = "#FFC7CE", NumberFormat = "0.0" }));
+            customers.AddConditionalFormat("C2:C4", ConditionalFormat.IconSet(IconSetKind.ThreeArrows));
+            Assert.True(customers.AddChart(new Chart(ChartType.Column) { Title = "Belopp", Series = [new ChartSeries("Belopp", "C2:C3", "A2:A3")] }, "F2:L16").IsSuccess(out _, out _));
+            customers.AddPicture(DrawingTests.PngPicture(), "N2");
 
             SheetWriter second = await TestFiles.AddSheetAsync(writer, "Andra");
             second.FreezePanes(2);
