@@ -156,12 +156,32 @@ Two programs are needed:
 
 The script publishes the harness and instruments only `Avig.Kalkyl.dll`. It then runs
 libFuzzer with `corpus/<target>/` as seeds. The inputs libFuzzer finds interesting go to
-`corpus-work/<target>/`, which is not under version control, so the seeds stay small. The seeds
-were made with `--write-corpus 16 --seed 1` and can be made again the same way.
+`%LOCALAPPDATA%\Avig.Kalkyl.Fuzz\corpus-work\<target>\`. That is outside the repo, so the seeds
+stay small and OneDrive does not upload a night's thousands of files. The seeds were made with
+`--write-corpus 16 --seed 1` and can be made again the same way.
 
 `fuzz-night.ps1` splits the time by weight: the package targets get the most, and
 `attribute-sweep` is left out, because under libFuzzer it runs the harness of `xlsx-part`. It
-writes a log to `findings/night-<date>.log` and ends with `corpus-check.ps1`.
+writes a log to `findings/night-<date>.log`, ends with `corpus-check.ps1`, and keeps the
+computer awake until it is done.
+
+#### Every night
+
+`schedule-night.ps1` puts `fuzz-night.ps1` in Windows Task Scheduler as the task
+`Avig.Kalkyl fuzz night`:
+
+```powershell
+./schedule-night.ps1                                      # every night 23:00, 7 h, 4 workers
+./schedule-night.ps1 -At 22:30 -TotalHours 8 -Workers 8
+./schedule-night.ps1 -Once                                # the coming night only
+./schedule-night.ps1 -Show                                # next run, last result, latest log
+./schedule-night.ps1 -Remove
+```
+
+The task runs as you, and only while you are logged on (a locked screen is fine), so it needs
+no stored password and no administrator. It wakes the computer from sleep. A night missed
+because the computer was off is not made up in the morning. A last result of 0 means nothing
+was found; 1 means a finding, or that corpus-check failed: read the log.
 
 The first libFuzzer runs (2026-11-24, libfuzzer-dotnet v2025.05.02) found two bugs within a
 minute that 50,000 smoke inputs had missed:

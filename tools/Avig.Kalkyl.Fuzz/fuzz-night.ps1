@@ -13,6 +13,15 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $env:PATH = "$HOME\bin;$HOME\.dotnet\tools;$env:PATH"
 
+# Keep the computer from going to sleep until the night is done: a scheduled task wakes it, but
+# Windows would otherwise let it sleep again after the idle time. ES_CONTINUOUS together with
+# ES_SYSTEM_REQUIRED holds for as long as this process lives.
+Add-Type -Namespace Avig -Name Power -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint SetThreadExecutionState(uint flags);
+"@
+[Avig.Power]::SetThreadExecutionState([uint32]2147483649) | Out-Null
+
 $weights = [ordered]@{
     "xlsx-part"     = 3
     "zip-raw"       = 2

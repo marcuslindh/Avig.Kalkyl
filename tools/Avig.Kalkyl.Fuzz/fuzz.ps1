@@ -18,9 +18,10 @@ $project = Join-Path $scriptDir "Avig.Kalkyl.Fuzz.csproj"
 $publishDir = Join-Path $scriptDir "bin\fuzz-publish"
 $corpusDir = Join-Path $scriptDir "corpus\$Target"
 $findingsDir = Join-Path $scriptDir "findings\$Target"
-# libFuzzer writes the inputs it finds interesting to the first corpus folder. That is a local
-# folder, so a night's run does not add thousands of files to the committed seeds in corpus/.
-$workDir = Join-Path $scriptDir "corpus-work\$Target"
+# libFuzzer writes the inputs it finds interesting to the first corpus folder. That folder is
+# outside the repo, so a night's run neither adds thousands of files to the committed seeds in
+# corpus/ nor makes a synced folder (the repo lives in OneDrive) upload them as they come.
+$workDir = Join-Path $env:LOCALAPPDATA "Avig.Kalkyl.Fuzz\corpus-work\$Target"
 
 Write-Host ""
 Write-Host "=== Avig.Kalkyl.Fuzz: $Target ===" -ForegroundColor Cyan
