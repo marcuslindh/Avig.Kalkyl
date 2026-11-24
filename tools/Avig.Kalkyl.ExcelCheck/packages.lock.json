@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Avig.Analyzers": {
+        "type": "Direct",
+        "requested": "[1.2.0, )",
+        "resolved": "1.2.0",
+        "contentHash": "dnpDYQFgf2MP3lUiJFeU63kvHIEUXzeeNSMUmnwjtv9owVDei59aI8MYFdZL8dUcwUBE3Tr3QllcQoImMWOsTA=="
+      },
+      "Avig.Result": {
+        "type": "Transitive",
+        "resolved": "1.0.2",
+        "contentHash": "CUYoKrg/M0mrRFn83f7rNwN5ieGhdrV0IYMF7qpC2+/sukP7z238YO/yY84hQ3iuhC8Qau+H2M4EjiO9+/M3dQ=="
+      },
+      "avig.kalkyl": {
+        "type": "Project",
+        "dependencies": {
+          "Avig.Result": "[1.0.2, )"
+        }
+      }
+    }
+  }
+}

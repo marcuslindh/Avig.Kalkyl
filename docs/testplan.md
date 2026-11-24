@@ -102,7 +102,7 @@ Alla brister i tabellen ovan är åtgärdade och har regressionstester i
 
 Det som återstår kräver en miljö eller ett beslut:
 
-- **FUN-04:** öppna filer i riktiga Excel. Excel finns inte på byggmaskinen.
+- **FUN-04:** öppna filerna i riktiga Excel. `tools/Avig.Kalkyl.ExcelCheck` skapar filerna, och de är kontrollerade mot schemat. Följ `docs/excel-checklista.md`. Excel finns inte på byggmaskinen, så en person måste göra genomgången.
 - **FUZ-01:** libFuzzer är installerat och har körts i tre minuter per paketmål (se nedan). En hel natt med `tools/Avig.Kalkyl.Fuzz/fuzz-night.ps1` återstår.
 - **SEC-03 i full storlek, SEC-05, PRF-02 och P-07 till P-09:** de kräver en isolerad container
   och kör i timmar.

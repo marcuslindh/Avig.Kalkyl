@@ -11,6 +11,8 @@
     <Project Path="src/Avig.Kalkyl.Generators/Avig.Kalkyl.Generators.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/Avig.Kalkyl.Benchmarks/Avig.Kalkyl.Benchmarks.csproj" />
+    <Project Path="tools/Avig.Kalkyl.ExcelCheck/Avig.Kalkyl.ExcelCheck.csproj" />
     <Project Path="tools/Avig.Kalkyl.Fuzz/Avig.Kalkyl.Fuzz.csproj" />
   </Folder>
   <Folder Name="/tests/">

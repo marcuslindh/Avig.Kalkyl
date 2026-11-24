@@ -279,6 +279,7 @@ tests/Avig.Kalkyl.Compatibility/download.ps1                            # real w
 dotnet test tests/Avig.Kalkyl.Compatibility
 tools/Avig.Kalkyl.Fuzz/corpus-check.ps1                                 # every fuzz input in its own process (stack, memory, hangs)
 dotnet run -c Release --project tools/Avig.Kalkyl.Benchmarks -- --filter *   # baseline in docs/benchmarks/baseline.md
+dotnet run --project tools/Avig.Kalkyl.ExcelCheck -- C:\temp\excel-check           # files to open in Excel, see docs/excel-checklista.md
 ```
 
 ## Licence
