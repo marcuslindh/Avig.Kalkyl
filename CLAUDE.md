@@ -55,6 +55,18 @@ vara verifierat genom sabotage (tabellen i README:n).
 - **Det som skrivs ska klara Microsofts schemavalidator.** Testet
   `A_file_with_every_feature_passes_Microsofts_schema_validation` ska täcka varje ny funktion
   i skrivaren.
+- **README-exemplen är tester.** Varje kodblock i README.md har en rad `<!-- example: namn -->`
+  före sig och ska vara exakt koden i `#region example: namn` i
+  `tests/Avig.Kalkyl.Tests/ReadmeExamples.cs`. Ändra koden där, kör testerna, och kopiera
+  sedan in den i README. `Every_README_example_is_code_that_runs_here` failar om de skiljer sig,
+  och varje csharp-block i README måste vara ett sådant exempel. Ett nytt publikt API ska få ett
+  scenario och en rad i README:s "The API at a glance".
+- **Diagram, bilder och villkorsstyrd formatering** samlas per blad i `SheetExtras`, som både
+  `SheetWriter` och `Worksheet` använder, och skrivs av `DrawingXml`, `DrawingPackage` och
+  `ConditionalFormatXml`. Ett blad har högst en ritning: i en öppnad fil läggs nya ankare till i
+  den som finns, och nya regler läggs efter de befintliga med högre `priority`. Regelstilarna
+  blir `dxf`-poster i `StyleRegistry`. Strict OOXML får inga ritningar. Testerna finns i
+  `DrawingTests.cs`; Excel-checkfil 10–12 visar dem i riktiga Excel.
 
 ## Versioner
 
