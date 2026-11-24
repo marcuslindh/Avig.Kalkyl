@@ -41,6 +41,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Avig.Kalkyl.Tests" />
+    <!-- The fuzz harness tests the internal conversions (CellText, ExcelDate, FormulaShifter) directly. -->
+    <InternalsVisibleTo Include="Avig.Kalkyl.Fuzz" />
   </ItemGroup>
 
   <ItemGroup>

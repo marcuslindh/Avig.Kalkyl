@@ -10,7 +10,11 @@
     <Project Path="src/Avig.Kalkyl/Avig.Kalkyl.csproj" />
     <Project Path="src/Avig.Kalkyl.Generators/Avig.Kalkyl.Generators.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Avig.Kalkyl.Fuzz/Avig.Kalkyl.Fuzz.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Avig.Kalkyl.Tests/Avig.Kalkyl.Tests.csproj" />
+    <Project Path="tests/Avig.Kalkyl.Compatibility/Avig.Kalkyl.Compatibility.csproj" />
   </Folder>
 </Solution>

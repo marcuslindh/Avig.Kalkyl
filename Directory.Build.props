@@ -18,6 +18,18 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 
+  <!-- Supply chain (docs/testplan.md, DEP-01): every package, transitive ones too, is checked
+       against known vulnerabilities at restore, and with TreatWarningsAsErrors a finding fails
+       the build. The lock files pin every version; CI restores in locked mode, so a changed
+       dependency cannot slip in without a change to a lock file. -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- Build-time rules, not a dependency of the package. publish.ps1 fails if anything but
          Avig.Result makes it into the nuspec. -->
