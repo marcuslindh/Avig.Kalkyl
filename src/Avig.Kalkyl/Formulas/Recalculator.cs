@@ -20,18 +20,23 @@ internal sealed class Recalculator
     private readonly List<string> circular = [];
     private readonly List<string> invalid = [];
 
-    private Recalculator(Workbook book, DateTime now)
+    private Recalculator(Workbook book, DateTime now, CancellationToken cancellationToken)
     {
         this.book = book;
-        evaluator = new Evaluator(book, now);
+        evaluator = new Evaluator(book, now) { CancellationToken = cancellationToken };
+
         evaluator.PendingCell = TryReadPending;
     }
 
     public static RecalculationReport Run(Workbook book, RecalculationScope scope, DateTime now, CancellationToken cancellationToken)
     {
-        Recalculator recalculator = new(book, now);
+        Recalculator recalculator = new(book, now, cancellationToken);
 
-        return recalculator.Run(scope, cancellationToken);
+        // The whole recalculation runs on this thread, so the array limit holds for all of it.
+        using (ValueArray.LimitTo(book.Limits.MaxArrayCells))
+        {
+            return recalculator.Run(scope, cancellationToken);
+        }
     }
 
     private RecalculationReport Run(RecalculationScope scope, CancellationToken cancellationToken)
@@ -225,18 +230,28 @@ internal sealed class Recalculator
                 break;
 
             case BinaryNode binary:
-                CollectPrecedents(binary.Left, context, ranges, ref isVolatile, depth);
-                CollectPrecedents(binary.Right, context, ranges, ref isVolatile, depth);
+                // The left spine of 1+1+…+1 is as long as the formula has terms, so it is walked
+                // in a loop rather than recursively (see Evaluator.Binary).
+                Node current = binary;
 
-                if (binary.Operator == ":")
+                while (current is BinaryNode chain)
                 {
-                    Value span = evaluator.Evaluate(binary, context);
+                    CollectPrecedents(chain.Right, context, ranges, ref isVolatile, depth);
 
-                    if (span.Kind == ValueKind.Reference)
+                    if (chain.Operator == ":")
                     {
-                        ranges.Add(span.Reference!);
+                        Value span = evaluator.Evaluate(chain, context);
+
+                        if (span.Kind == ValueKind.Reference)
+                        {
+                            ranges.Add(span.Reference!);
+                        }
                     }
+
+                    current = chain.Left;
                 }
+
+                CollectPrecedents(current, context, ranges, ref isVolatile, depth);
 
                 break;
         }

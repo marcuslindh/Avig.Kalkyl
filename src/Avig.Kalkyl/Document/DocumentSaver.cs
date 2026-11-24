@@ -141,8 +141,8 @@ internal static class DocumentSaver
             XmlParts.TryFindEntry(original, stylesPath!, out ZipArchiveEntry? stylesEntry);
             await WritePartAsync(archive, stylesEntry!.FullName, async xml =>
             {
-                await using Stream stream = await stylesEntry.OpenAsync(cancellationToken);
-                using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+                await using Stream stream = await XmlParts.OpenEntryAsync(stylesEntry, cancellationToken);
+                using XmlReader reader = XmlParts.CreateReader(stream);
                 await styles.WriteMergedAsync(reader, xml);
             }, cancellationToken);
         }
@@ -163,8 +163,8 @@ internal static class DocumentSaver
 
         XmlParts.TryFindEntry(original, workbookPath, out ZipArchiveEntry? workbookEntry);
         await WritePartAsync(archive, workbookPath, xml => WritePatchedWorkbookAsync(xml, workbookEntry!, book, added, hasFormulas, cancellationToken), cancellationToken);
-        await WritePartAsync(archive, workbookRelsPath, xml => WritePatchedWorkbookRelationshipsAsync(xml, original, workbookRelsPath, added, addedStylesId, cancellationToken), cancellationToken);
-        await WritePartAsync(archive, "[Content_Types].xml", xml => WritePatchedContentTypesAsync(xml, original, added, calcChainPath, addedStylesId is not null, stylesPath, cancellationToken), cancellationToken);
+        await WritePartAsync(archive, workbookRelsPath, xml => WritePatchedWorkbookRelationshipsAsync(xml, original, workbookRelsPath, added, addedStylesId, book.RemovingMacros, cancellationToken), cancellationToken);
+        await WritePartAsync(archive, "[Content_Types].xml", xml => WritePatchedContentTypesAsync(xml, original, book, workbookPath, added, calcChainPath, addedStylesId is not null, stylesPath, cancellationToken), cancellationToken);
 
         foreach (ZipArchiveEntry entry in original.Entries)
         {
@@ -175,8 +175,13 @@ internal static class DocumentSaver
                 continue;
             }
 
+            if (book.RemovingMacros == true && Workbook.IsVbaPart(name) == true)
+            {
+                continue;
+            }
+
             ZipArchiveEntry copy = archive.CreateEntry(entry.FullName, CompressionLevel.Optimal);
-            await using Stream source = await entry.OpenAsync(cancellationToken);
+            await using Stream source = await XmlParts.OpenEntryAsync(entry, cancellationToken);
             await using Stream target = await copy.OpenAsync(cancellationToken);
             await source.CopyToAsync(target, cancellationToken);
         }
@@ -213,8 +218,8 @@ internal static class DocumentSaver
         // Ids of external relationships are not in the dictionary but must not be reused either.
         if (XmlParts.TryFindEntry(original, relsPath, out ZipArchiveEntry? relsEntry) == true)
         {
-            await using Stream stream = await relsEntry.OpenAsync(cancellationToken);
-            using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+            await using Stream stream = await XmlParts.OpenEntryAsync(relsEntry, cancellationToken);
+            using XmlReader reader = XmlParts.CreateReader(stream);
 
             while (await reader.ReadAsync() == true)
             {
@@ -249,8 +254,8 @@ internal static class DocumentSaver
     private static async Task WritePatchedSheetAsync(XmlWriter xml, ZipArchiveEntry entry, Worksheet sheet, StyleRegistry styles, bool uses1904, CancellationToken cancellationToken)
     {
         SheetSource source = sheet.Source!;
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader reader = XmlParts.CreateReader(stream);
         await reader.MoveToContentAsync();
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(reader.Prefix, reader.LocalName, reader.NamespaceURI);
@@ -280,6 +285,8 @@ internal static class DocumentSaver
             replacements["autoFilter"] = () => WriteFilterAsync(xml, sheet);
         }
 
+        HashSet<string> owned = [.. replacements.Keys];
+
         if (reader.IsEmptyElement == false)
         {
             await reader.ReadAsync();
@@ -294,11 +301,27 @@ internal static class DocumentSaver
                 }
 
                 string name = reader.LocalName;
-                await WritePendingBeforeAsync(replacements, SheetXml.OrderOf(name), SheetXml.OrderOf);
+
+                // An element the schema does not name (mc:AlternateContent, another program's
+                // extension, damage) says nothing about where the replacements belong. Treating
+                // it as "after everything" wrote sheetData before it and then copied the
+                // original sheetData as well, so the file held two and the edit was lost.
+                if (SheetXml.IsKnown(name) == true)
+                {
+                    await WritePendingBeforeAsync(replacements, SheetXml.OrderOf(name), SheetXml.OrderOf);
+                }
 
                 if (replacements.Remove(name, out Func<Task>? replacement) == true)
                 {
                     await replacement();
+                    await reader.SkipAsync();
+
+                    continue;
+                }
+
+                // A second copy of an element already written from the model is dropped.
+                if (owned.Contains(name) == true)
+                {
                     await reader.SkipAsync();
 
                     continue;
@@ -423,8 +446,8 @@ internal static class DocumentSaver
 
     private static async Task WritePatchedWorkbookAsync(XmlWriter xml, ZipArchiveEntry entry, Workbook book, List<NewSheet> added, bool hasFormulas, CancellationToken cancellationToken)
     {
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader reader = XmlParts.CreateReader(stream);
         await reader.MoveToContentAsync();
         string relationshipsNamespace = Ooxml.RelationshipsNamespace;
 
@@ -457,6 +480,7 @@ internal static class DocumentSaver
         }
 
         int orderOf(string name) => OrderIn(WorkbookOrder, name);
+        HashSet<string> owned = [.. pending.Keys];
 
         if (reader.IsEmptyElement == false)
         {
@@ -472,7 +496,20 @@ internal static class DocumentSaver
                 }
 
                 string name = reader.LocalName;
-                await WritePendingBeforeAsync(pending, orderOf(name), orderOf);
+
+                // As for worksheets: an element the schema does not name must not pull the sheet
+                // list in front of it, or the original list is copied too and every sheet appears twice.
+                if (Array.IndexOf(WorkbookOrder, name) >= 0)
+                {
+                    await WritePendingBeforeAsync(pending, orderOf(name), orderOf);
+                }
+
+                if (owned.Contains(name) == true && pending.ContainsKey(name) == false)
+                {
+                    await reader.SkipAsync();
+
+                    continue;
+                }
 
                 switch (name)
                 {
@@ -671,15 +708,15 @@ internal static class DocumentSaver
         await xml.WriteEndElementAsync();
     }
 
-    private static async Task WritePatchedWorkbookRelationshipsAsync(XmlWriter xml, ZipArchive original, string relsPath, List<NewSheet> added, string? addedStylesId, CancellationToken cancellationToken)
+    private static async Task WritePatchedWorkbookRelationshipsAsync(XmlWriter xml, ZipArchive original, string relsPath, List<NewSheet> added, string? addedStylesId, bool removeMacros, CancellationToken cancellationToken)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Relationships", Ooxml.PackageRelationshipsNamespace);
 
         if (XmlParts.TryFindEntry(original, relsPath, out ZipArchiveEntry? entry) == true)
         {
-            await using Stream stream = await entry.OpenAsync(cancellationToken);
-            using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+            await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+            using XmlReader reader = XmlParts.CreateReader(stream);
 
             while (reader.EOF == false)
             {
@@ -690,15 +727,19 @@ internal static class DocumentSaver
                     continue;
                 }
 
-                if (Ooxml.IsRelationship(reader.GetAttribute("Type") ?? string.Empty, "calcChain") == true)
+                string relationshipType = reader.GetAttribute("Type") ?? string.Empty;
+
+                if (Ooxml.IsRelationship(relationshipType, "calcChain") == true || (removeMacros == true && relationshipType.EndsWith("/vbaProject", StringComparison.Ordinal) == true))
                 {
                     await reader.SkipAsync();
 
                     continue;
                 }
 
-                await WriteRelationshipAsync(xml, reader.GetAttribute("Id") ?? string.Empty, reader.GetAttribute("Type") ?? string.Empty, reader.GetAttribute("Target") ?? string.Empty, reader.GetAttribute("TargetMode"));
-                await reader.SkipAsync();
+                // Copied exactly. Rebuilding it filled a missing Target with "", which the reader
+                // takes as a real target, so a relationship it had skipped now replaced another
+                // with the same Id and a sheet disappeared on the next open.
+                await xml.WriteNodeAsync(reader, true);
             }
         }
 
@@ -716,7 +757,26 @@ internal static class DocumentSaver
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WritePatchedContentTypesAsync(XmlWriter xml, ZipArchive original, List<NewSheet> added, string? calcChainPath, bool addStyles, string? stylesPath, CancellationToken cancellationToken)
+    private const string VbaProjectContentType = "application/vnd.ms-office.vbaProject";
+
+    private const string SharedStringsContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
+
+    /// <summary>The macro-enabled workbook types and the plain types they become when the VBA project is removed.</summary>
+    private static readonly Dictionary<string, string> MacroEnabledTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["application/vnd.ms-excel.sheet.macroEnabled.main+xml"] = Ooxml.WorkbookContentType,
+        ["application/vnd.ms-excel.template.macroEnabled.main+xml"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+    };
+
+    private static async Task WriteDefaultAsync(XmlWriter xml, string extension, string contentType)
+    {
+        await xml.WriteStartElementAsync(null, "Default", null);
+        await xml.WriteAttributeStringAsync(null, "Extension", null, extension);
+        await xml.WriteAttributeStringAsync(null, "ContentType", null, contentType);
+        await xml.WriteEndElementAsync();
+    }
+
+    private static async Task WritePatchedContentTypesAsync(XmlWriter xml, ZipArchive original, Workbook book, string workbookPath, List<NewSheet> added, string? calcChainPath, bool addStyles, string? stylesPath, CancellationToken cancellationToken)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Types", Ooxml.ContentTypesNamespace);
@@ -729,8 +789,8 @@ internal static class DocumentSaver
 
         if (XmlParts.TryFindEntry(original, "[Content_Types].xml", out ZipArchiveEntry? entry) == true)
         {
-            await using Stream stream = await entry.OpenAsync(cancellationToken);
-            using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+            await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+            using XmlReader reader = XmlParts.CreateReader(stream);
 
             while (reader.EOF == false)
             {
@@ -742,12 +802,21 @@ internal static class DocumentSaver
                 }
 
                 string? partName = reader.GetAttribute("PartName");
+                string contentType = reader.GetAttribute("ContentType") ?? string.Empty;
+                bool calcChain = reader.LocalName == "Override" && calcChainPart is not null && string.Equals(partName, calcChainPart, StringComparison.OrdinalIgnoreCase) == true;
+                bool macro = book.RemovingMacros == true && (string.Equals(contentType, VbaProjectContentType, StringComparison.OrdinalIgnoreCase) == true || (partName is not null && Workbook.IsVbaPart(partName) == true));
 
-                if (reader.LocalName == "Override" && calcChainPart is not null && string.Equals(partName, calcChainPart, StringComparison.OrdinalIgnoreCase) == true)
+                if (calcChain == true || macro == true)
                 {
                     await reader.SkipAsync();
 
                     continue;
+                }
+
+                // Without its VBA project the workbook is a plain one, and says so.
+                if (book.RemovingMacros == true && MacroEnabledTypes.TryGetValue(contentType, out string? plain) == true)
+                {
+                    contentType = plain;
                 }
 
                 await xml.WriteStartElementAsync(null, reader.LocalName, null);
@@ -761,9 +830,32 @@ internal static class DocumentSaver
                     await xml.WriteAttributeStringAsync(null, "PartName", null, partName ?? string.Empty);
                 }
 
-                await xml.WriteAttributeStringAsync(null, "ContentType", null, reader.GetAttribute("ContentType") ?? string.Empty);
+                await xml.WriteAttributeStringAsync(null, "ContentType", null, contentType);
                 await xml.WriteEndElementAsync();
                 await reader.SkipAsync();
+            }
+        }
+        else
+        {
+            // A file without content types (some tools write none) still opens here; written
+            // back as it was, Excel could not open it, so the package's own parts are declared.
+            await WriteDefaultAsync(xml, "rels", Ooxml.RelationshipsContentType);
+            await WriteDefaultAsync(xml, "xml", "application/xml");
+            await WriteOverrideAsync(xml, "/" + workbookPath, Ooxml.WorkbookContentType);
+
+            foreach (Worksheet sheet in book.Sheets.Where(sheet => sheet.Source is not null))
+            {
+                await WriteOverrideAsync(xml, "/" + sheet.Source!.Path, Ooxml.WorksheetContentType);
+            }
+
+            if (addStyles == false && stylesPath is not null)
+            {
+                await WriteOverrideAsync(xml, "/" + stylesPath, Ooxml.StylesContentType);
+            }
+
+            foreach (ZipArchiveEntry part in original.Entries.Where(part => part.Name.Equals("sharedStrings.xml", StringComparison.OrdinalIgnoreCase) == true))
+            {
+                await WriteOverrideAsync(xml, "/" + part.FullName.Replace('\\', '/'), SharedStringsContentType);
             }
         }
 

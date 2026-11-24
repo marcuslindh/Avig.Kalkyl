@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Avig.Kalkyl.Internal;
 
 namespace Avig.Kalkyl.Formulas;
@@ -33,13 +34,42 @@ internal sealed class Evaluator
 
     public bool Uses1904 => Workbook.Uses1904Dates;
 
+    /// <summary>How text is read as numbers and dates: the workbook's date system and culture.</summary>
+    public TextConversion Conversion => new(Workbook.Uses1904Dates, Workbook.Culture);
+
     /// <summary>Asked for a formula cell's value when it may not be calculated yet; false means "use the stored value".</summary>
     public PendingCellReader? PendingCell { get; set; }
 
     /// <summary>Functions that were called but do not exist; they evaluate to #NAME?.</summary>
     public HashSet<string> UnknownFunctions { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Stops an evaluation that takes too long; checked at every node of the formula.</summary>
+    public CancellationToken CancellationToken { get; init; }
+
     public Value Evaluate(Node node, EvaluationContext context)
+    {
+        CancellationToken.ThrowIfCancellationRequested();
+
+        // The parser limits nesting, but defined names, INDIRECT and formula cells calculated on
+        // demand can still lead deeper. A stack overflow cannot be caught and ends the process,
+        // so the formula fails instead while there is stack left.
+        if (RuntimeHelpers.TryEnsureSufficientExecutionStack() == false)
+        {
+            return Value.Calc;
+        }
+
+        try
+        {
+            return EvaluateNode(node, context);
+        }
+        catch (ArrayTooLargeException)
+        {
+            // KalkylLimits.MaxArrayCells: the array would not fit, as a number too large is #NUM!.
+            return Value.Num;
+        }
+    }
+
+    private Value EvaluateNode(Node node, EvaluationContext context)
     {
         switch (node)
         {
@@ -166,6 +196,65 @@ internal sealed class Evaluator
         return Value.ValueError;
     }
 
+    /// <summary>
+    /// True when a range is so much larger than the rows its sheet holds that walking those rows
+    /// is cheaper than visiting every position. One value in XFD1048576 makes the used area of
+    /// A:XFD 17 billion positions. For a range about the size of the sheet both ways cost the
+    /// same (measured), and a small range at the end of a long sheet is quicker position by position.
+    /// </summary>
+    public static bool PreferStored(Worksheet sheet, long area)
+    {
+        return area > 4_096 && area > 8L * (sheet.RowEntries.Count + 1);
+    }
+
+    /// <summary>
+    /// The cells the sheet holds inside a range with their values, row by row and left to
+    /// right, as the dense walk visits them, but without looking each one up again.
+    /// </summary>
+    public IEnumerable<(int Row, int Column, Value Value)> StoredValues(Worksheet sheet, int firstRow, int lastRow, int firstColumn, int lastColumn)
+    {
+        foreach ((int row, RowEntry entry) in sheet.RowEntries)
+        {
+            if (row < firstRow)
+            {
+                continue;
+            }
+
+            if (row > lastRow)
+            {
+                break;
+            }
+
+            CancellationToken.ThrowIfCancellationRequested();
+
+            foreach ((int column, CellEntry cell) in entry.Cells)
+            {
+                if (column < firstColumn)
+                {
+                    continue;
+                }
+
+                if (column > lastColumn)
+                {
+                    break;
+                }
+
+                yield return (row, column, EntryValue(sheet, row, column, cell.Cell));
+            }
+        }
+    }
+
+    /// <summary>As <see cref="CellValue(Worksheet, int, int)"/>, for a cell already in hand.</summary>
+    private Value EntryValue(Worksheet sheet, int row, int column, Cell cell)
+    {
+        if (cell.Formula is not null && PendingCell is not null && PendingCell(sheet, row, column, out Value pending) == true)
+        {
+            return pending;
+        }
+
+        return FromCellValue(cell.Value);
+    }
+
     /// <summary>A reference or array as an array of values; a scalar becomes a 1×1 array. Whole columns stop at the last used row.</summary>
     public ValueArray ToValueArray(Value value)
     {
@@ -194,6 +283,8 @@ internal sealed class Evaluator
 
             for (int row = 0; row < rows; row++)
             {
+                CancellationToken.ThrowIfCancellationRequested();
+
                 for (int column = 0; column < columns; column++)
                 {
                     array[row, column] = CellValue(range.Sheet, range.FirstRow + row, range.FirstColumn + column);
@@ -341,12 +432,37 @@ internal sealed class Evaluator
         return Map(operand, context, value => Arithmetic(Value.FromNumber(0), value, "-"));
     }
 
+    /// <summary>
+    /// 1+1+…+1 parses into a tree as deep as it has terms, since the operators are
+    /// left-associative, and a formula has room for 4 000 of them. Evaluating the left side
+    /// recursively overflowed the stack at about 700. The left spine is walked in a loop
+    /// instead, in the same order: the innermost left operand first, then each right operand.
+    /// </summary>
     private Value Binary(BinaryNode binary, EvaluationContext context)
     {
-        Value left = Evaluate(binary.Left, context);
-        Value right = Evaluate(binary.Right, context);
+        List<BinaryNode> spine = [binary];
+        Node innermost = binary.Left;
 
-        if (binary.Operator == ":")
+        while (innermost is BinaryNode inner)
+        {
+            spine.Add(inner);
+            innermost = inner.Left;
+        }
+
+        Value value = Evaluate(innermost, context);
+
+        for (int index = spine.Count - 1; index >= 0; index--)
+        {
+            BinaryNode node = spine[index];
+            value = Combine(node.Operator, value, Evaluate(node.Right, context), context);
+        }
+
+        return value;
+    }
+
+    private Value Combine(string op, Value left, Value right, EvaluationContext context)
+    {
+        if (op == ":")
         {
             return RangeUnion(left, right);
         }
@@ -356,7 +472,7 @@ internal sealed class Evaluator
 
         if (leftWide == false && rightWide == false)
         {
-            return Scalar(binary.Operator, Dereference(left, context), Dereference(right, context));
+            return Scalar(op, Dereference(left, context), Dereference(right, context));
         }
 
         // Element by element, as in an array formula: SUMPRODUCT((A1:A9>0)*B1:B9) needs it.
@@ -372,7 +488,7 @@ internal sealed class Evaluator
             {
                 Value leftItem = Broadcast(leftArray, row, column);
                 Value rightItem = Broadcast(rightArray, row, column);
-                result[row, column] = Scalar(binary.Operator, leftItem, rightItem);
+                result[row, column] = Scalar(op, leftItem, rightItem);
             }
         }
 
@@ -434,14 +550,14 @@ internal sealed class Evaluator
 
     private Value Arithmetic(Value left, Value right, string op)
     {
-        Value leftNumber = Coerce.ToNumber(left, Uses1904);
+        Value leftNumber = Coerce.ToNumber(left, Conversion);
 
         if (leftNumber.IsError == true)
         {
             return leftNumber;
         }
 
-        Value rightNumber = Coerce.ToNumber(right, Uses1904);
+        Value rightNumber = Coerce.ToNumber(right, Conversion);
 
         if (rightNumber.IsError == true)
         {

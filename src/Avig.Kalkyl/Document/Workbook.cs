@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.IO.Compression;
 using Avig.Kalkyl.Document;
 using Avig.Kalkyl.Reading;
 
@@ -20,6 +22,11 @@ namespace Avig.Kalkyl;
 /// }
 /// </code>
 /// </example>
+/// <remarks>
+/// Not safe to change from several threads at once; separate instances are independent. For a
+/// file from outside, see <see cref="KalkylLimits"/> and <see cref="HasMacros"/>. Error
+/// messages name paths, sheets and cell contents: log them, but do not show them to whoever sent the file.
+/// </remarks>
 public sealed class Workbook
 {
     private readonly List<Worksheet> sheets = [];
@@ -38,6 +45,17 @@ public sealed class Workbook
 
     /// <summary>True when the workbook counts dates from 1904, as old Mac files do. Dates are converted either way.</summary>
     public bool Uses1904Dates { get; }
+
+    /// <summary>
+    /// The culture formulas read text in, when text has to become a number or a date: the
+    /// separators in "1,5" and "1 000", and the order in "3/2/2013" (3 February in en-GB,
+    /// 2 March in en-US). ISO dates such as 2026-02-01 are read in every culture. Excel uses
+    /// the culture of the machine that calculates, and so does this, unless it is set; set it
+    /// to the culture the workbook was made in to get the results its author saw. Formatting
+    /// (TEXT, DOLLAR, FIXED) is not affected. Recalculate with RecalculationScope.All after
+    /// changing it.
+    /// </summary>
+    public CultureInfo Culture { get; set; } = CultureInfo.CurrentCulture;
 
     /// <summary>The bytes of the file that was opened, or null for a new workbook.</summary>
     internal byte[]? Package { get; }
@@ -69,13 +87,29 @@ public sealed class Workbook
     /// The workbook; NotFound when the file does not exist, Forbidden when it may not be read,
     /// Conflict when another program holds it locked, and Invalid when it is not an .xlsx workbook.
     /// </returns>
-    public static async Task<Result<Workbook>> OpenAsync(string path, CancellationToken cancellationToken = default)
+    public static Task<Result<Workbook>> OpenAsync(string path, CancellationToken cancellationToken = default)
+    {
+        return OpenAsync(path, KalkylLimits.Default, cancellationToken);
+    }
+
+    /// <summary>Opens a file, with limits on how much it may unpack to and how many cells it may hold.</summary>
+    /// <param name="path">The file.</param>
+    /// <param name="limits">The limits; <see cref="KalkylLimits.Default"/> unless the file is trusted. Kept in <see cref="Limits"/>.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>As <see cref="OpenAsync(string, CancellationToken)"/>, and Invalid when the file goes past a limit.</returns>
+    public static async Task<Result<Workbook>> OpenAsync(string path, KalkylLimits limits, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(limits);
         byte[] bytes;
 
         try
         {
+            if (new FileInfo(path).Length > limits.MaxUncompressedBytes)
+            {
+                return Result<Workbook>.Invalid($"'{path}' is larger than {limits.MaxUncompressedBytes:N0} bytes, the limit set in KalkylLimits.MaxUncompressedBytes.");
+            }
+
             bytes = await File.ReadAllBytesAsync(path, cancellationToken);
         }
         catch (FileNotFoundException)
@@ -95,20 +129,35 @@ public sealed class Workbook
             return Result<Workbook>.Conflict($"'{path}' could not be opened: {exception.Message}");
         }
 
-        return await OpenBytesAsync(bytes, cancellationToken);
+        return await OpenBytesAsync(bytes, limits, cancellationToken);
     }
 
     /// <summary>Reads a workbook from a stream. The whole stream is read into memory.</summary>
     /// <param name="input">The stream. It is not closed.</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
     /// <returns>The workbook, or Invalid when the content is not an .xlsx workbook.</returns>
-    public static async Task<Result<Workbook>> OpenAsync(Stream input, CancellationToken cancellationToken = default)
+    public static Task<Result<Workbook>> OpenAsync(Stream input, CancellationToken cancellationToken = default)
+    {
+        return OpenAsync(input, KalkylLimits.Default, cancellationToken);
+    }
+
+    /// <summary>Reads a workbook from a stream, with limits on how much it may unpack to and how many cells it may hold.</summary>
+    /// <param name="input">The stream. It is not closed.</param>
+    /// <param name="limits">The limits; <see cref="KalkylLimits.Default"/> unless the content is trusted. Kept in <see cref="Limits"/>.</param>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The workbook, or Invalid when the content is not an .xlsx workbook or goes past a limit.</returns>
+    public static async Task<Result<Workbook>> OpenAsync(Stream input, KalkylLimits limits, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(limits);
         using MemoryStream copy = new();
-        await input.CopyToAsync(copy, cancellationToken);
 
-        return await OpenBytesAsync(copy.ToArray(), cancellationToken);
+        if (await XlsxReader.CopyLimitedAsync(input, copy, limits.MaxUncompressedBytes, cancellationToken) == false)
+        {
+            return Result<Workbook>.Invalid($"The stream is longer than {limits.MaxUncompressedBytes:N0} bytes, the limit set in KalkylLimits.MaxUncompressedBytes.");
+        }
+
+        return await OpenBytesAsync(copy.ToArray(), limits, cancellationToken);
     }
 
     /// <summary>Adds an empty sheet after the others.</summary>
@@ -231,8 +280,9 @@ public sealed class Workbook
     /// </summary>
     /// <param name="formula">The formula, with or without a leading <c>=</c>, such as <c>SUM(Budget!B2:B9)</c>.</param>
     /// <param name="sheet">The sheet that references without a sheet name point to; the first sheet when null.</param>
+    /// <param name="cancellationToken">Stops a formula that takes too long; it throws OperationCanceledException.</param>
     /// <returns>The result, or Invalid when the formula cannot be parsed.</returns>
-    public Result<CellValue> Evaluate(string formula, Worksheet? sheet = null)
+    public Result<CellValue> Evaluate(string formula, Worksheet? sheet = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(formula);
         Worksheet? context = sheet ?? sheets.FirstOrDefault();
@@ -249,11 +299,83 @@ public sealed class Workbook
             return Result<CellValue>.Invalid(parsed.Error!);
         }
 
-        Formulas.Evaluator evaluator = new(this, Clock.GetLocalNow().DateTime);
-        Formulas.EvaluationContext evaluationContext = new(context, 0, 0);
-        Formulas.Value result = evaluator.Dereference(evaluator.Evaluate(node, evaluationContext), evaluationContext);
+        Formulas.Evaluator evaluator = new(this, Clock.GetLocalNow().DateTime) { CancellationToken = cancellationToken };
 
-        return Formulas.Recalculator.ToCellValue(result, Style.Default, Uses1904Dates);
+        Formulas.EvaluationContext evaluationContext = new(context, 0, 0);
+
+        using (Formulas.ValueArray.LimitTo(Limits.MaxArrayCells))
+        {
+            Formulas.Value result = evaluator.Dereference(evaluator.Evaluate(node, evaluationContext), evaluationContext);
+
+            return Formulas.Recalculator.ToCellValue(result, Style.Default, Uses1904Dates);
+        }
+    }
+
+    /// <summary>
+    /// The limits the workbook was opened with; <see cref="KalkylLimits.Default"/> for a new one.
+    /// <see cref="KalkylLimits.MaxArrayCells"/> also applies to recalculation and <see cref="Evaluate"/>.
+    /// </summary>
+    public KalkylLimits Limits { get; set; } = KalkylLimits.Default;
+
+    /// <summary>
+    /// True when the file has active content: a VBA project (.xlsm), Excel 4.0 macro sheets,
+    /// dialog sheets or ActiveX controls. The package never runs any of it, but it keeps it when
+    /// the file is saved, as it keeps everything it does not understand: opening and saving a
+    /// file does not make it safe. Use <see cref="RemoveMacros"/> for that.
+    /// </summary>
+    public bool HasMacros { get; private set; }
+
+    /// <summary>True when <see cref="RemoveMacros"/> was called and the next save drops the VBA project.</summary>
+    internal bool RemovingMacros { get; private set; }
+
+    /// <summary>
+    /// Makes the next save drop the VBA project (vbaProject.bin and its signatures) and turn the
+    /// workbook into a plain .xlsx. Save it under a name ending in .xlsx, since Excel refuses an
+    /// .xlsm without macros less than an .xlsx with them.
+    /// </summary>
+    /// <returns>
+    /// Success, also when there is nothing to remove; Invalid when the file has Excel 4.0 macro
+    /// sheets, dialog sheets or ActiveX controls, which are woven into the sheets and cannot be
+    /// taken out without changing them.
+    /// </returns>
+    public Result RemoveMacros()
+    {
+        if (Package is not null)
+        {
+            using ZipArchive archive = new(new MemoryStream(Package, false), ZipArchiveMode.Read);
+
+            if (archive.Entries.Any(entry => IsWovenActiveContent(entry.FullName) == true) == true)
+            {
+                return Result.Invalid("The workbook has Excel 4.0 macro sheets, dialog sheets or ActiveX controls, which the package cannot remove. Remove them in Excel.");
+            }
+        }
+
+        RemovingMacros = true;
+
+        return Result.Success();
+    }
+
+    /// <summary>A part of the VBA project, which <see cref="RemoveMacros"/> drops: vbaProject.bin, its signatures and their relationships.</summary>
+    internal static bool IsVbaPart(string path)
+    {
+        string name = path.Replace('\\', '/');
+        string file = name[(name.LastIndexOf('/') + 1)..];
+
+        return file.StartsWith("vbaProject", StringComparison.OrdinalIgnoreCase) == true || file.StartsWith("vbaData", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static bool IsWovenActiveContent(string path)
+    {
+        string name = path.Replace('\\', '/');
+
+        return name.Contains("/macrosheets/", StringComparison.OrdinalIgnoreCase) == true
+            || name.Contains("/dialogsheets/", StringComparison.OrdinalIgnoreCase) == true
+            || name.Contains("/activeX/", StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static bool HasActiveContent(ZipArchive archive)
+    {
+        return archive.Entries.Any(entry => IsVbaPart(entry.FullName) == true || IsWovenActiveContent(entry.FullName) == true);
     }
 
     /// <summary>True once a sheet's settings (widths, panes, filter, visibility) have changed.</summary>
@@ -274,9 +396,9 @@ public sealed class Workbook
         sheets.Add(sheet);
     }
 
-    private static async Task<Result<Workbook>> OpenBytesAsync(byte[] bytes, CancellationToken cancellationToken)
+    private static async Task<Result<Workbook>> OpenBytesAsync(byte[] bytes, KalkylLimits limits, CancellationToken cancellationToken)
     {
-        Result<XlsxReader> opened = await XlsxReader.OpenAsync(new MemoryStream(bytes, false), false, cancellationToken);
+        Result<XlsxReader> opened = await XlsxReader.OpenAsync(new MemoryStream(bytes, false), limits, false, cancellationToken);
 
         if (opened.IsSuccess(out XlsxReader? reader) == false)
         {
@@ -285,7 +407,8 @@ public sealed class Workbook
 
         await using (reader)
         {
-            Workbook book = new(bytes, reader.Styles, reader.Uses1904Dates, reader.WorkbookPath);
+            Workbook book = new(bytes, reader.Styles, reader.Uses1904Dates, reader.WorkbookPath) { Limits = limits, HasMacros = HasActiveContent(reader.Archive) };
+
             Result loaded = await DocumentLoader.LoadAsync(book, reader, cancellationToken);
 
             if (loaded.IsFailure(out string? error, out ResultStatus status) == true)

@@ -108,6 +108,26 @@ internal sealed class StatisticalFunctionsGrid
         return new StatisticalFunctionsGrid(evaluator, reference with { LastRow = lastRow, LastColumn = lastColumn }, null);
     }
 
+    /// <summary>True when the first <paramref name="usedRows"/> x <paramref name="usedColumns"/> of a range are mostly empty positions (see Evaluator.PreferStored).</summary>
+    public bool IsSparse(int usedRows, int usedColumns)
+    {
+        return reference is not null && Evaluator.PreferStored(reference.Sheet, (long)usedRows * usedColumns);
+    }
+
+    /// <summary>The cells the sheet holds in the first <paramref name="usedRows"/> x <paramref name="usedColumns"/>, with positions counted from the top-left cell, row by row.</summary>
+    public IEnumerable<(int Row, int Column, Value Value)> StoredValues(int usedRows, int usedColumns)
+    {
+        RangeReference range = reference!;
+
+        foreach ((int row, int column, Value value) in evaluator.StoredValues(range.Sheet, range.FirstRow, range.FirstRow + usedRows - 1, range.FirstColumn, range.FirstColumn + usedColumns - 1))
+        {
+            yield return (row - range.FirstRow, column - range.FirstColumn, value);
+        }
+    }
+
+    /// <summary>Stops a long walk over the grid when the evaluation is cancelled.</summary>
+    public CancellationToken CancellationToken => evaluator.CancellationToken;
+
     /// <summary>The value at a position counted from the top-left cell; blank outside the grid.</summary>
     public Value Get(int row, int column)
     {

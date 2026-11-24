@@ -54,35 +54,53 @@ public sealed class Worksheet
     }
 
     /// <summary>One past the last row that has a cell or row settings. 0 for an empty sheet.</summary>
-    public int RowCount
-    {
-        get
-        {
-            if (rows.Count == 0)
-            {
-                return 0;
-            }
-
-            return rows.Keys.Last() + 1;
-        }
-    }
+    public int RowCount => rowCount;
 
     /// <summary>One past the last column that has a cell. 0 for an empty sheet.</summary>
     public int ColumnCount
     {
         get
         {
-            int count = 0;
-
-            foreach (RowEntry row in rows.Values)
+            if (columnCount < 0)
             {
-                if (row.Cells.Count > 0)
-                {
-                    count = Math.Max(count, row.Cells.Keys.Last() + 1);
-                }
+                columnCount = CountColumns();
             }
 
-            return count;
+            return columnCount;
+        }
+    }
+
+    /// <summary>
+    /// Kept up to date as rows are added instead of found on demand: the formula engine asks
+    /// for the used area on every range it reads, and walking a SortedDictionary for it made a
+    /// SUM(G2:I2) cost as much as the whole sheet (minutes for 200 000 formulas on 30 000 rows).
+    /// Rows are never removed, so the count only grows.
+    /// </summary>
+    private int rowCount;
+
+    /// <summary>As <see cref="rowCount"/>, but -1 when a cell in the last column was cleared and the count must be found again.</summary>
+    private int columnCount;
+
+    private int CountColumns()
+    {
+        int count = 0;
+
+        foreach (RowEntry row in rows.Values)
+        {
+            if (row.Cells.Count > 0)
+            {
+                count = Math.Max(count, row.Cells.Keys.Last() + 1);
+            }
+        }
+
+        return count;
+    }
+
+    private void CellAdded(int column)
+    {
+        if (columnCount >= 0 && column >= columnCount)
+        {
+            columnCount = column + 1;
         }
     }
 
@@ -195,6 +213,7 @@ public sealed class Worksheet
     }
 
     /// <summary>Puts a formula in a cell and keeps its style. The cached value is cleared until the workbook is recalculated.</summary>
+    /// <remarks>Never pass text from a user; see <see cref="Cell.FromFormula(string)"/>.</remarks>
     /// <param name="row">The row, 0-based.</param>
     /// <param name="column">The column, 0-based.</param>
     /// <param name="formula">The formula, with or without a leading <c>=</c>.</param>
@@ -213,6 +232,11 @@ public sealed class Worksheet
 
         if (rows.TryGetValue(row, out RowEntry? entry) == true && entry.Cells.Remove(column) == true)
         {
+            if (column + 1 >= columnCount)
+            {
+                columnCount = -1;
+            }
+
             Workbook.MarkChanged(this, row, column);
         }
     }
@@ -301,6 +325,7 @@ public sealed class Worksheet
     internal void Load(int row, int column, CellEntry entry)
     {
         GetRow(row).Cells[column] = entry;
+        CellAdded(column);
     }
 
     internal RowEntry GetRow(int row)
@@ -309,6 +334,7 @@ public sealed class Worksheet
         {
             entry = new RowEntry([]);
             rows[row] = entry;
+            rowCount = Math.Max(rowCount, row + 1);
         }
 
         return entry;
@@ -362,6 +388,7 @@ public sealed class Worksheet
         }
 
         GetRow(row).Cells[column] = new CellEntry(value, null, styleIndex, keepStyle);
+        CellAdded(column);
         Workbook.MarkChanged(this, row, column);
     }
 

@@ -42,6 +42,13 @@ internal static class CellXml
             return string.Empty;
         }
 
+        // A time without a date is stored on day zero. With a date in the format Excel shows it
+        // as 1900-01-00, and some readers (Sylvan) refuse a date before day 1.
+        if (date.Date == new DateTime(1899, 12, 31, 0, 0, 0, DateTimeKind.Unspecified))
+        {
+            return NumberFormats.TimeFormat;
+        }
+
         if (date.TimeOfDay != TimeSpan.Zero)
         {
             return NumberFormats.DateTimeFormat;
@@ -74,7 +81,16 @@ internal static class CellXml
 
             await xml.WriteElementStringAsync(null, "f", null, CellText.Encode(cell.Formula));
 
-            if (value.IsEmpty == false)
+            if (value.Kind == CellKind.Text)
+            {
+                // As for inline text: without xml:space other readers, and Excel, trim the
+                // cached result, so "Age " from PROPER(L7) came back as "Age".
+                await xml.WriteStartElementAsync(null, "v", null);
+                await xml.WriteAttributeStringAsync("xml", "space", null, "preserve");
+                await xml.WriteStringAsync(StoredValue(value, uses1904));
+                await xml.WriteEndElementAsync();
+            }
+            else if (value.IsEmpty == false)
             {
                 await xml.WriteElementStringAsync(null, "v", null, StoredValue(value, uses1904));
             }
@@ -111,8 +127,45 @@ internal static class CellXml
         await xml.WriteEndElementAsync();
     }
 
-    /// <summary>Parses the &lt;c&gt; the reader is on. Afterwards the reader is on the node after the element.</summary>
+    /// <summary>
+    /// The 0-based index of the &lt;row&gt; the reader is on: its r attribute, or the row after
+    /// the previous one when it has none. A row after the last one a sheet can have is damage.
+    /// </summary>
+    public static int RowIndex(XmlReader reader, int previousRow, CellContext context)
+    {
+        int rowIndex = previousRow + 1;
+
+        if (int.TryParse(reader.GetAttribute("r"), NumberStyles.None, CultureInfo.InvariantCulture, out int rowNumber) == true && rowNumber > 0)
+        {
+            rowIndex = rowNumber - 1;
+        }
+
+        if (rowIndex >= CellAddress.MaxRows)
+        {
+            throw new InvalidDataException($"The file is damaged: the sheet '{context.SheetName}' has a row after row {CellAddress.MaxRows}, the last one a sheet can have.");
+        }
+
+        return rowIndex;
+    }
+
+    /// <summary>
+    /// Parses the &lt;c&gt; the reader is on. Afterwards the reader is on the node after the
+    /// element. Broken XML inside the cell is reported as <see cref="InvalidDataException"/>,
+    /// like broken XML between cells: reading an element's content parses as much as moving on does.
+    /// </summary>
     public static async Task<ParsedCell> ReadCellAsync(XmlReader reader, int rowIndex, int previousColumn, CellContext context)
+    {
+        try
+        {
+            return await ReadCellContentAsync(reader, rowIndex, previousColumn, context);
+        }
+        catch (XmlException exception)
+        {
+            throw new InvalidDataException($"The file is damaged: the sheet '{context.SheetName}' has broken XML at line {exception.LineNumber}: {exception.Message}", exception);
+        }
+    }
+
+    private static async Task<ParsedCell> ReadCellContentAsync(XmlReader reader, int rowIndex, int previousColumn, CellContext context)
     {
         int column = previousColumn + 1;
         string? reference = reader.GetAttribute("r");
@@ -195,7 +248,7 @@ internal static class CellXml
         }
         catch (XmlException exception)
         {
-            throw new InvalidDataException($"The file is damaged: the sheet '{context.SheetName}' has broken XML at line {exception.LineNumber}.", exception);
+            throw new InvalidDataException($"The file is damaged: the sheet '{context.SheetName}' has broken XML at line {exception.LineNumber}: {exception.Message}", exception);
         }
     }
 
@@ -246,13 +299,13 @@ internal static class CellXml
                     throw Damaged(context, rowIndex, column, $"it points to shared text {stored}, which does not exist");
                 }
 
-                return CellValue.Text(context.SharedStrings[index]);
+                return Text(context.SharedStrings[index], rowIndex, column, context);
 
             case "inlineStr":
-                return CellValue.Text(inline ?? string.Empty);
+                return Text(inline ?? string.Empty, rowIndex, column, context);
 
             case "str":
-                return CellValue.Text(CellText.Decode(stored ?? string.Empty));
+                return Text(CellText.Decode(stored ?? string.Empty), rowIndex, column, context);
 
             case "b":
                 return CellValue.Bool(stored is "1" or "true");
@@ -274,7 +327,8 @@ internal static class CellXml
                     return CellValue.Empty;
                 }
 
-                if (double.TryParse(stored, NumberStyles.Float, CultureInfo.InvariantCulture, out double number) == false)
+                // TryParse accepts NaN and Infinity, and gives infinity for 1e309; Excel has neither.
+                if (double.TryParse(stored, NumberStyles.Float, CultureInfo.InvariantCulture, out double number) == false || double.IsFinite(number) == false)
                 {
                     throw Damaged(context, rowIndex, column, $"'{stored}' is not a number");
                 }
@@ -286,6 +340,21 @@ internal static class CellXml
 
                 return CellValue.Number(number);
         }
+    }
+
+    /// <summary>
+    /// Text from the file, which a cell can only hold up to 32 767 characters of. Longer text is
+    /// damage, reported as such; CellValue.Text would throw ArgumentOutOfRangeException, which is
+    /// not what a damaged file may give.
+    /// </summary>
+    private static CellValue Text(string text, int rowIndex, int column, CellContext context)
+    {
+        if (text.Length > CellValue.MaxTextLength)
+        {
+            throw Damaged(context, rowIndex, column, $"its text is {text.Length:N0} characters long, and a cell holds at most {CellValue.MaxTextLength:N0}");
+        }
+
+        return CellValue.Text(text);
     }
 
     private static CellValue ToError(string? stored)
