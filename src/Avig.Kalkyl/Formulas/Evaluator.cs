@@ -108,14 +108,12 @@ internal sealed class Evaluator
     /// <summary>A cell's value as the formula engine sees it: dates are serial numbers.</summary>
     public Value CellValue(Worksheet sheet, int row, int column)
     {
-        Cell cell = sheet[row, column];
-
-        if (cell.Formula is not null && PendingCell is not null && PendingCell(sheet, row, column, out Value pending) == true)
+        if (sheet.TryGetEntry(row, column, out CellEntry? entry) == false)
         {
-            return pending;
+            return Value.Blank;
         }
 
-        return FromCellValue(cell.Value);
+        return EntryValue(sheet, row, column, entry.Cell);
     }
 
     public Value FromCellValue(CellValue value)
@@ -213,32 +211,12 @@ internal sealed class Evaluator
     /// </summary>
     public IEnumerable<(int Row, int Column, Value Value)> StoredValues(Worksheet sheet, int firstRow, int lastRow, int firstColumn, int lastColumn)
     {
-        foreach ((int row, RowEntry entry) in sheet.RowEntries)
+        foreach ((int row, RowEntry entry) in sheet.RowEntries.Between(firstRow, lastRow))
         {
-            if (row < firstRow)
-            {
-                continue;
-            }
-
-            if (row > lastRow)
-            {
-                break;
-            }
-
             CancellationToken.ThrowIfCancellationRequested();
 
-            foreach ((int column, CellEntry cell) in entry.Cells)
+            foreach ((int column, CellEntry cell) in entry.Cells.Between(firstColumn, lastColumn))
             {
-                if (column < firstColumn)
-                {
-                    continue;
-                }
-
-                if (column > lastColumn)
-                {
-                    break;
-                }
-
                 yield return (row, column, EntryValue(sheet, row, column, cell.Cell));
             }
         }

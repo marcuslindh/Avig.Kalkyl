@@ -8,7 +8,7 @@ namespace Avig.Kalkyl;
 /// </summary>
 public sealed class Worksheet
 {
-    private readonly SortedDictionary<int, RowEntry> rows = [];
+    private readonly RowTable rows = new();
     private List<ColumnRange> columns;
     private int frozenRows;
     private int frozenColumns;
@@ -72,7 +72,7 @@ public sealed class Worksheet
 
     /// <summary>
     /// Kept up to date as rows are added instead of found on demand: the formula engine asks
-    /// for the used area on every range it reads, and walking a SortedDictionary for it made a
+    /// for the used area on every range it reads, and walking the rows for it made a
     /// SUM(G2:I2) cost as much as the whole sheet (minutes for 200 000 formulas on 30 000 rows).
     /// Rows are never removed, so the count only grows.
     /// </summary>
@@ -89,7 +89,7 @@ public sealed class Worksheet
         {
             if (row.Cells.Count > 0)
             {
-                count = Math.Max(count, row.Cells.Keys.Last() + 1);
+                count = Math.Max(count, row.Cells.LastColumn + 1);
             }
         }
 
@@ -147,7 +147,20 @@ public sealed class Worksheet
 
     internal IReadOnlyList<ColumnRange> Columns => columns;
 
-    internal SortedDictionary<int, RowEntry> RowEntries => rows;
+    internal RowTable RowEntries => rows;
+
+    /// <summary>The stored cell at a position, without the bounds check of the indexer: the formula engine's way in.</summary>
+    internal bool TryGetEntry(int row, int column, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out CellEntry? entry)
+    {
+        if (rows.TryGetValue(row, out RowEntry? found) == true)
+        {
+            return found.Cells.TryGetValue(column, out entry);
+        }
+
+        entry = null;
+
+        return false;
+    }
 
     /// <summary>The cell at a position. Setting it replaces value, formula and style; use <see cref="SetValue"/> to keep the style.</summary>
     /// <param name="row">The row, 0-based.</param>
@@ -159,7 +172,7 @@ public sealed class Worksheet
         {
             Check(row, column);
 
-            if (rows.TryGetValue(row, out RowEntry? entry) == true && entry.Cells.TryGetValue(column, out CellEntry? cell) == true)
+            if (TryGetEntry(row, column, out CellEntry? cell) == true)
             {
                 return cell.Cell;
             }
@@ -332,8 +345,8 @@ public sealed class Worksheet
     {
         if (rows.TryGetValue(row, out RowEntry? entry) == false)
         {
-            entry = new RowEntry([]);
-            rows[row] = entry;
+            entry = new RowEntry(new CellRow());
+            rows.Add(row, entry);
             rowCount = Math.Max(rowCount, row + 1);
         }
 
@@ -398,7 +411,7 @@ public sealed class Worksheet
 
         if (row.Cells.Count > 0)
         {
-            width = row.Cells.Keys.Last() + 1;
+            width = row.Cells.LastColumn + 1;
         }
 
         Cell[] cells = new Cell[width];
@@ -437,7 +450,7 @@ public sealed class Worksheet
 internal sealed record CellEntry(Cell Cell, string? RawXml, int StyleIndex, bool StyleFromFile);
 
 /// <summary>A row: its cells, and the row's own attributes from the file (height, hidden, style ...).</summary>
-internal sealed record RowEntry(SortedDictionary<int, CellEntry> Cells)
+internal sealed record RowEntry(CellRow Cells)
 {
     public IReadOnlyList<(string Prefix, string LocalName, string Namespace, string Value)> Attributes { get; set; } = [];
 }

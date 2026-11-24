@@ -436,42 +436,121 @@ internal sealed class Recalculator
         public Value Result { get; set; }
     }
 
-    /// <summary>The formula cells of one sheet, sorted by row, so the cells inside a range are found without visiting every formula.</summary>
+    /// <summary>
+    /// The formula cells of one sheet, by row and by column, so that the cells inside a range are
+    /// found without visiting every formula. A whole column, as in SUMIF(B:B,...), spans every
+    /// row; walking the rows for it made 10 000 such formulas take 9 seconds to connect. The
+    /// index takes whichever way has fewer rows or columns with formulas in the range.
+    /// </summary>
     private sealed class SheetIndex
     {
-        private readonly SortedDictionary<int, List<FormulaCell>> rows = [];
-        private int[]? keys;
+        private readonly Dictionary<int, List<FormulaCell>> byRow = [];
+        private readonly Dictionary<int, List<FormulaCell>> byColumn = [];
+        private int[]? rowKeys;
+        private List<FormulaCell>[]? rowLists;
+        private int[]? columnKeys;
+        private List<FormulaCell>[]? columnLists;
 
         public void Add(FormulaCell cell)
         {
-            if (rows.TryGetValue(cell.Row, out List<FormulaCell>? row) == false)
-            {
-                row = [];
-                rows[cell.Row] = row;
-            }
-
-            row.Add(cell);
-            keys = null;
+            AddTo(byRow, cell.Row, cell);
+            AddTo(byColumn, cell.Column, cell);
+            rowKeys = null;
+            columnKeys = null;
         }
 
         public IEnumerable<FormulaCell> Within(RangeReference range)
         {
-            keys ??= rows.Keys.ToArray();
-            int start = Array.BinarySearch(keys, range.FirstRow);
-
-            if (start < 0)
+            if (rowKeys is null || columnKeys is null)
             {
-                start = ~start;
+                (rowKeys, rowLists) = Sorted(byRow);
+                (columnKeys, columnLists) = Sorted(byColumn);
             }
 
-            for (int index = start; index < keys.Length && keys[index] <= range.LastRow; index++)
+            (int firstRowIndex, int rowCount) = Span(rowKeys, range.FirstRow, range.LastRow);
+            (int firstColumnIndex, int columnCount) = Span(columnKeys, range.FirstColumn, range.LastColumn);
+
+            if (columnCount <= rowCount)
             {
-                foreach (FormulaCell cell in rows[keys[index]])
+                return Collect(columnLists!, firstColumnIndex, columnCount, cell => cell.Row, range.FirstRow, range.LastRow);
+            }
+
+            return Collect(rowLists!, firstRowIndex, rowCount, cell => cell.Column, range.FirstColumn, range.LastColumn);
+        }
+
+        private static void AddTo(Dictionary<int, List<FormulaCell>> index, int key, FormulaCell cell)
+        {
+            if (index.TryGetValue(key, out List<FormulaCell>? list) == false)
+            {
+                list = [];
+                index[key] = list;
+            }
+
+            list.Add(cell);
+        }
+
+        /// <summary>The keys ascending, and each key's cells sorted by the other coordinate, so that both can be searched.</summary>
+        private static (int[] Keys, List<FormulaCell>[] Lists) Sorted(Dictionary<int, List<FormulaCell>> index)
+        {
+            int[] keys = [.. index.Keys.Order()];
+            List<FormulaCell>[] lists = new List<FormulaCell>[keys.Length];
+
+            for (int position = 0; position < keys.Length; position++)
+            {
+                lists[position] = index[keys[position]];
+                lists[position].Sort(static (left, right) => (left.Row, left.Column).CompareTo((right.Row, right.Column)));
+            }
+
+            return (keys, lists);
+        }
+
+        /// <summary>Where the keys from <paramref name="first"/> to <paramref name="last"/> start, and how many there are.</summary>
+        private static (int Start, int Count) Span(int[] keys, int first, int last)
+        {
+            int start = LowerBound(keys, first);
+            int end = LowerBound(keys, last + 1);
+
+            return (start, end - start);
+        }
+
+        private static int LowerBound(int[] keys, int value)
+        {
+            int found = Array.BinarySearch(keys, value);
+
+            if (found < 0)
+            {
+                return ~found;
+            }
+
+            return found;
+        }
+
+        private static IEnumerable<FormulaCell> Collect(List<FormulaCell>[] lists, int start, int count, Func<FormulaCell, int> other, int first, int last)
+        {
+            for (int position = start; position < start + count; position++)
+            {
+                List<FormulaCell> list = lists[position];
+                int low = 0;
+                int high = list.Count;
+
+                // The list is sorted by the other coordinate (row for a column, column for a row): find where the range starts.
+                while (low < high)
                 {
-                    if (cell.Column >= range.FirstColumn && cell.Column <= range.LastColumn)
+                    int middle = (low + high) / 2;
+
+                    if (other(list[middle]) < first)
                     {
-                        yield return cell;
+                        low = middle + 1;
                     }
+                    else
+                    {
+                        high = middle;
+                    }
+                }
+
+                for (int index = low; index < list.Count && other(list[index]) <= last; index++)
+                {
+                    yield return list[index];
                 }
             }
         }
