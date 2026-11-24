@@ -34,6 +34,11 @@ public sealed class XlsxWriter : IAsyncDisposable
         Encoding = new UTF8Encoding(false),
         Indent = false,
         CloseOutput = false,
+
+        // The default, Replace, writes every \n in a cell as Environment.NewLine: "a\nb" became
+        // "a\r\nb" on Windows, and ClosedXML read it back that way. Entitize leaves text as it
+        // is and writes line breaks in attributes as references, which a reader cannot fold away.
+        NewLineHandling = NewLineHandling.Entitize,
     };
 
     private static readonly SearchValues<char> ForbiddenNameCharacters = SearchValues.Create(":\\/?*[]");

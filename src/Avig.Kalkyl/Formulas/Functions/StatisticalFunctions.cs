@@ -69,7 +69,7 @@ internal static class StatisticalFunctions
             return true;
         }
 
-        Value converted = Coerce.ToNumber(scalar, call.Uses1904);
+        Value converted = Coerce.ToNumber(scalar, call.Conversion);
 
         if (converted.IsError == true)
         {

@@ -68,8 +68,8 @@ internal sealed class StyleTable
         List<FontInfo> fonts = [];
         List<string?> fills = [];
         List<FormatInfo> cellFormats = [];
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader reader = XmlParts.CreateReader(stream);
         string section = string.Empty;
         int sectionDepth = -1;
 
@@ -280,7 +280,8 @@ internal sealed class StyleTable
                     break;
 
                 case "sz":
-                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double points) == true)
+                    // A size Excel cannot show (it allows 1 to 409 points) is left out, as Style would refuse it.
+                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double points) == true && points >= 1 && points <= 409)
                     {
                         size = points;
                     }

@@ -17,7 +17,7 @@ internal static class DateFunctions
 
     private static readonly string[] ExtraDateFormats =
     [
-        "d-MMM-yyyy", "d-MMM-yy", "d MMM yy", "MMMM d, yyyy", "MMMM d yyyy", "MMM d yyyy", "yyyy-M-d", "yyyy/M/d", "M/d/yy", "d-MMMM-yyyy",
+        "d-MMM-yyyy", "d-MMM-yy", "d MMM yy", "MMMM d, yyyy", "MMMM d yyyy", "MMM d yyyy", "yyyy-M-d", "yyyy/M/d", "d-MMMM-yyyy",
     ];
 
     public static void Register(FunctionTable table)
@@ -144,11 +144,11 @@ internal static class DateFunctions
             return false;
         }
 
-        return TryParseDate(scalar.Text!, call.Uses1904, out serial);
+        return TryParseDate(scalar.Text!, call.Conversion, out serial);
     }
 
     /// <summary>Date or time text as a serial, in the invariant formats. A plain number, a percentage or an amount is not a date.</summary>
-    private static bool TryParseDate(string source, bool uses1904, out double serial)
+    private static bool TryParseDate(string source, TextConversion conversion, out double serial)
     {
         serial = 0;
         string text = source.Trim();
@@ -158,19 +158,19 @@ internal static class DateFunctions
             return false;
         }
 
-        if (double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out _) == true)
+        if (double.TryParse(text, NumberStyles.Float | NumberStyles.AllowThousands, conversion.Culture, out _) == true)
         {
             return false;
         }
 
-        if (Coerce.TryParseNumber(text, uses1904, out serial) == true)
+        if (Coerce.TryParseNumber(text, conversion, out serial) == true)
         {
             return serial >= 0;
         }
 
         if (DateTime.TryParseExact(text, ExtraDateFormats, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out DateTime date) == true)
         {
-            serial = ExcelDate.ToSerial(date, uses1904);
+            serial = ExcelDate.ToSerial(date, conversion.Uses1904);
 
             return serial >= 0;
         }
@@ -802,7 +802,7 @@ internal static class DateFunctions
 
             if (item.Kind == ValueKind.Text)
             {
-                if (TryParseDate(item.Text!, call.Uses1904, out double parsed) == false)
+                if (TryParseDate(item.Text!, call.Conversion, out double parsed) == false)
                 {
                     error = Value.ValueError;
 

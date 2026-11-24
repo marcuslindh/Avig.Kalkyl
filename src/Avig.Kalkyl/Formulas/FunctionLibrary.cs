@@ -58,6 +58,7 @@ internal static class FunctionLibrary
         InformationFunctions.Register(table);
         FinancialFunctions.Register(table);
         EngineeringFunctions.Register(table);
+        DatabaseFunctions.Register(table);
 
         return table.Functions;
     }

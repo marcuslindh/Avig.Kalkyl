@@ -39,8 +39,8 @@ public sealed class SheetReader
     /// <returns>The rows.</returns>
     public async IAsyncEnumerable<Row> ReadRowsAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await using Stream stream = await entry.OpenAsync(cancellationToken);
-        using XmlReader reader = XmlReader.Create(stream, XmlParts.Settings);
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader reader = XmlParts.CreateReader(stream);
         CellContext context = new(sharedStrings, styles, uses1904, Info.Name);
         int previousRow = -1;
 
@@ -52,12 +52,7 @@ public sealed class SheetReader
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            int rowIndex = previousRow + 1;
-
-            if (int.TryParse(reader.GetAttribute("r"), NumberStyles.None, CultureInfo.InvariantCulture, out int rowNumber) == true && rowNumber > 0)
-            {
-                rowIndex = rowNumber - 1;
-            }
+            int rowIndex = CellXml.RowIndex(reader, previousRow, context);
 
             previousRow = rowIndex;
 

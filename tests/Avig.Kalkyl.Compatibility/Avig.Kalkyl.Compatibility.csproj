@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.12.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The libraries Avig.Kalkyl is compared with. Tests only: the package itself depends on
+         nothing but Avig.Result. NPOI and EPPlus are left out because of their licence terms. -->
+    <PackageReference Include="ExcelDataReader" Version="3.9.0" />
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
+    <PackageReference Include="Sylvan.Data.Excel" Version="0.5.8" />
+    <PackageReference Include="MiniExcel" Version="2.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Avig" />
+    <Using Include="Avig.Kalkyl" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Avig.Kalkyl\Avig.Kalkyl.csproj" />
+  </ItemGroup>
+
+</Project>
