@@ -146,6 +146,63 @@ public class HostileFilesTests
         Assert.Contains("point to the same part", error, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Found by libFuzzer: in .NET 10, XmlTextReaderImpl throws ArgumentOutOfRangeException from
+    /// Buffer.BlockCopy for this malformed declaration read from a deflate stream. It is broken
+    /// XML, and must be refused as such.
+    /// </summary>
+    [Fact]
+    public async Task A_declaration_that_breaks_the_XML_reader_is_a_damaged_file()
+    {
+        byte[] declaration = [.. Encoding.ASCII.GetBytes("<?xml version=\"1.0zzzzzzzz"), .. Enumerable.Repeat((byte)0xFF, 94), .. Encoding.ASCII.GetBytes(new string('z', 28) + "-8\" standalone=\"yes\"?>\rmats.org/>5.5")];
+        await using MemoryStream file = new();
+
+        using (ZipArchive archive = new(file, ZipArchiveMode.Create, true))
+        {
+            foreach ((string path, string content) in Parts(Sheet(OneCell)))
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(content);
+
+                if (path == "_rels/.rels")
+                {
+                    bytes = declaration;
+                }
+
+                await using Stream entry = await archive.CreateEntry(path, CompressionLevel.Fastest).OpenAsync();
+                await entry.WriteAsync(bytes);
+            }
+        }
+
+        file.Position = 0;
+
+        Assert.Contains("broken XML", await RefusedAsync(file), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Found by libFuzzer: sheets and names outside &lt;sheets&gt; and &lt;definedNames&gt; were read
+    /// as well. The saver rewrote &lt;sheets&gt; and copied the unknown element, so every sheet came
+    /// back twice and the saved file could not be opened.
+    /// </summary>
+    [Fact]
+    public async Task Sheets_and_names_outside_their_sections_are_not_read()
+    {
+        string workbook = $"""<workbook xmlns="{Main}" xmlns:r="{Relationships}"><sheetz><sheet name="Ghost" sheetId="9" r:id="rId1"/></sheetz><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets><definedNamez><definedName name="Ghost">Data!$A$1</definedName></definedNamez></workbook>""";
+        await using MemoryStream file = File(Parts(Sheet(OneCell), workbook: workbook));
+
+        Assert.True((await Workbook.OpenAsync(file)).IsSuccess(out Workbook? book));
+        Assert.Equal(["Data"], book.Sheets.Select(sheet => sheet.Name));
+        Assert.True(book.Evaluate("Ghost").IsSuccess(out CellValue ghost));
+        Assert.Equal(CellValue.Error("#NAME?"), ghost);
+
+        book.Sheets[0][0, 0] = "changed";
+        await using MemoryStream saved = new();
+        await book.SaveAsync(saved);
+        saved.Position = 0;
+
+        Assert.True((await Workbook.OpenAsync(saved)).IsSuccess(out Workbook? again));
+        Assert.Equal(["Data"], again.Sheets.Select(sheet => sheet.Name));
+    }
+
     /// <summary>Found by the zip-raw fuzz target: an entry without a name opened, and the save failed when it wrote the entry again.</summary>
     [Fact]
     public async Task An_entry_without_a_name_is_refused()

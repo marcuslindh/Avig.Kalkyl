@@ -118,9 +118,17 @@ internal static class DocumentLoader
         await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
         using XmlReader xml = XmlParts.CreateReader(stream);
 
+        // Only the names in <definedNames>, the element the saver copies them from (see ReadWorkbookAsync).
+        string section = string.Empty;
+
         while (xml.EOF == false)
         {
-            if (XmlParts.IsElement(xml, "definedName") == false)
+            if (xml.NodeType == XmlNodeType.Element && xml.Depth == 1)
+            {
+                section = xml.LocalName;
+            }
+
+            if (section != "definedNames" || xml.Depth != 2 || XmlParts.IsElement(xml, "definedName") == false)
             {
                 await xml.ReadAsync();
 

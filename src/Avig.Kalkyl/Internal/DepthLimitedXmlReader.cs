@@ -68,7 +68,21 @@ internal sealed class DepthLimitedXmlReader : XmlReader, IXmlLineInfo
 
     public override XmlReaderSettings? Settings => settings;
 
-    public override string Value => inner.Value;
+    // The value of a text node is decoded when it is asked for, so it can meet the same defect as Read.
+    public override string Value
+    {
+        get
+        {
+            try
+            {
+                return inner.Value;
+            }
+            catch (Exception exception) when (IsReaderDefect(exception) == true)
+            {
+                throw Broken(exception);
+            }
+        }
+    }
 
     public override string XmlLang => inner.XmlLang;
 
@@ -158,7 +172,17 @@ internal sealed class DepthLimitedXmlReader : XmlReader, IXmlLineInfo
 
     public override bool Read()
     {
-        bool more = inner.Read();
+        bool more;
+
+        try
+        {
+            more = inner.Read();
+        }
+        catch (Exception exception) when (IsReaderDefect(exception) == true)
+        {
+            throw Broken(exception);
+        }
+
         Check();
 
         return more;
@@ -171,20 +195,37 @@ internal sealed class DepthLimitedXmlReader : XmlReader, IXmlLineInfo
             return Read();
         }
 
-        bool more = await inner.ReadAsync();
+        bool more;
+
+        try
+        {
+            more = await inner.ReadAsync();
+        }
+        catch (Exception exception) when (IsReaderDefect(exception) == true)
+        {
+            throw Broken(exception);
+        }
+
         Check();
 
         return more;
     }
 
-    public override Task<string> GetValueAsync()
+    public override async Task<string> GetValueAsync()
     {
         if (synchronous == true)
         {
-            return Task.FromResult(inner.Value);
+            return Value;
         }
 
-        return inner.GetValueAsync();
+        try
+        {
+            return await inner.GetValueAsync();
+        }
+        catch (Exception exception) when (IsReaderDefect(exception) == true)
+        {
+            throw Broken(exception);
+        }
     }
 
     // Straight to the inner reader for speed: an element read as text has no child elements, so
@@ -192,17 +233,31 @@ internal sealed class DepthLimitedXmlReader : XmlReader, IXmlLineInfo
     // is opened would otherwise be found only when the file is saved and the subtree copied.
     public override string ReadElementContentAsString()
     {
-        return inner.ReadElementContentAsString();
+        try
+        {
+            return inner.ReadElementContentAsString();
+        }
+        catch (Exception exception) when (IsReaderDefect(exception) == true)
+        {
+            throw Broken(exception);
+        }
     }
 
-    public override Task<string> ReadElementContentAsStringAsync()
+    public override async Task<string> ReadElementContentAsStringAsync()
     {
         if (synchronous == true)
         {
-            return Task.FromResult(inner.ReadElementContentAsString());
+            return ReadElementContentAsString();
         }
 
-        return inner.ReadElementContentAsStringAsync();
+        try
+        {
+            return await inner.ReadElementContentAsStringAsync();
+        }
+        catch (Exception exception) when (IsReaderDefect(exception) == true)
+        {
+            throw Broken(exception);
+        }
     }
 
     public override bool ReadAttributeValue()
@@ -223,6 +278,22 @@ internal sealed class DepthLimitedXmlReader : XmlReader, IXmlLineInfo
         }
 
         base.Dispose(disposing);
+    }
+
+    /// <summary>
+    /// An exception the XML reader should not throw for any input. XmlTextReaderImpl in .NET 10
+    /// throws ArgumentOutOfRangeException from Buffer.BlockCopy for a malformed XML declaration
+    /// read from a deflate stream (found by libFuzzer, fixed in .NET 11). Any input that does it
+    /// is broken XML, and is reported as such.
+    /// </summary>
+    private static bool IsReaderDefect(Exception exception)
+    {
+        return exception is ArgumentException or IndexOutOfRangeException;
+    }
+
+    private XmlException Broken(Exception exception)
+    {
+        return new XmlException($"The XML could not be read: {exception.Message}", exception, LineNumber, LinePosition);
     }
 
     private void Check()

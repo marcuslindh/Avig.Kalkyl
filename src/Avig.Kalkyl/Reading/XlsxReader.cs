@@ -418,9 +418,19 @@ public sealed class XlsxReader : IAsyncDisposable
         await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
         using XmlReader reader = XmlParts.CreateReader(stream);
 
+        // Only the sheets in <sheets>, the workbook's own child: the saver rewrites that element and
+        // copies the others, so a <sheet> anywhere else (found by libFuzzer in a <sheetz>) came back
+        // as a second copy of every sheet.
+        string section = string.Empty;
+
         while (await reader.ReadAsync() == true)
         {
-            if (XmlParts.IsElement(reader, "workbookPr") == true)
+            if (reader.NodeType == XmlNodeType.Element && reader.Depth == 1)
+            {
+                section = reader.LocalName;
+            }
+
+            if (reader.Depth == 1 && XmlParts.IsElement(reader, "workbookPr") == true)
             {
                 string? date1904 = reader.GetAttribute("date1904");
                 uses1904 = date1904 is "1" or "true";
@@ -428,7 +438,7 @@ public sealed class XlsxReader : IAsyncDisposable
                 continue;
             }
 
-            if (XmlParts.IsElement(reader, "sheet") == true)
+            if (section == "sheets" && reader.Depth == 2 && XmlParts.IsElement(reader, "sheet") == true)
             {
                 string? name = reader.GetAttribute("name");
 
