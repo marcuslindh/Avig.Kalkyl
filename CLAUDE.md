@@ -38,9 +38,15 @@ vara verifierat genom sabotage (tabellen i README:n).
 
 ## Regler som betyder mest
 
-- **Inga beroenden utom Avig.Result.** Inget zip-, XML- eller bildbibliotek: allt görs med
-  `System.IO.Compression` och `XmlReader`/`XmlWriter`. `publish.ps1` failar annars. Testerna
-  får använda vad de vill (DocumentFormat.OpenXml används för schemavalidering).
+- **Inga beroenden utom Avig.Result och Avig.OpenXml.** Inget zip-, XML- eller bildbibliotek:
+  allt görs med `System.IO.Compression` och `XmlReader`/`XmlWriter`. `publish.ps1` failar annars.
+  Testerna får använda vad de vill (DocumentFormat.OpenXml används för schemavalidering).
+- **Paketlagret finns i Avig.OpenXml** (`G:\OneDrive\SkunkWorks\Prod\Lib\Avig.OpenXml`), som
+  delas med Avig.Ord: zip-kontrollerna, storleksgränserna, XmlReader med djupgräns, relationer
+  och sökvägar. `XmlParts` och `Ooxml` är tunna omslag kring det. Ett fel där rättas i
+  Avig.OpenXml, och då ska både Kalkyls och Ords tester köras. Paketet är 0.x i
+  `G:\LocalNugetRepo` (se `nuget.config`) tills det släpps med Kalkyl 1.0.0; det måste ligga på
+  nuget.org innan en tagg pushas, eftersom publiceringsflödet inte når G:\.
 - **0-baserat överallt** i det publika API:t. Excels adresser (C2) bara i `CellAddress.Parse`,
   `ToString` och i felmeddelanden, som alltid ska ange båda: "cell B2 (row 1, column 1)".
 - **Förväntade fel är `Result`**, inte undantag: fel format, saknad fil, ogiltigt bladnamn.
