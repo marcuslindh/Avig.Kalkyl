@@ -238,6 +238,12 @@ internal static class LookupFunctions
 
         if (call.IsMissing(2) == true)
         {
+            if (source.Rows == 0 || source.Columns == 0)
+            {
+                // A reference with no cells in it (past the sheet's data): nothing to find.
+                return Value.NA;
+            }
+
             if (source.Columns > source.Rows)
             {
                 keys = Row(source, 0);

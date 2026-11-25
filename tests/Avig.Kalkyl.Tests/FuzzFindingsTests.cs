@@ -276,6 +276,16 @@ public class FuzzFindingsTests
         Assert.Equal(CellValue.Error("#VALUE!"), Formula.Evaluate(formula));
     }
 
+    /// <summary>LOOKUP with no result vector used to index past an empty array (fuzz finding crash-3ce4567c).</summary>
+    [Theory]
+    [InlineData("=LOOKUP(\"?\",XFD1)")]
+    [InlineData("=LOOKUP(1,XFD1)")]
+    [InlineData("=LOOKUP(\"?\",XFD1:XFD3)")]
+    public void LOOKUP_in_a_reference_without_data_is_NA(string formula)
+    {
+        Assert.Equal(CellValue.Error("#N/A"), Formula.Evaluate(formula));
+    }
+
     [Theory]
     [InlineData("Other!#REF!")]
     [InlineData("'Other sheet'!#REF!+1")]
