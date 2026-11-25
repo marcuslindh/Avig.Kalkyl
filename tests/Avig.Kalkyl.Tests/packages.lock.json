@@ -166,7 +166,13 @@
       },
       "avig.kalkyl.generators": {
         "type": "Project"
+      },
+      "avig.kalkyl.samples": {
+        "type": "Project",
+        "dependencies": {
+          "Avig.Kalkyl": "[0.1.0, )"
+        }
       }
     }
   }
-}
+}

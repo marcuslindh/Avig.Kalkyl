@@ -59,6 +59,7 @@ internal static class Program
         await WriteDrawingOptionsAsync(Path.Combine(output, "16-drawing-options.xlsx"));
         await WritePivotDashboardAsync(Path.Combine(output, "17-pivot-dashboard.xlsx"));
         await WritePivotTemplateAsync(Path.Combine(output, "17-pivot-dashboard.xlsx"), Path.Combine(output, "18-pivot-template-refreshed.xlsx"));
+        await WriteGalleryAsync(output);
         await File.WriteAllLinesAsync(Path.Combine(output, "expected.txt"), Expected);
         Console.WriteLine($"Files in {output}. Open each in Excel and follow docs/excel-checklista.md; expected.txt has the values to compare.");
 
@@ -618,6 +619,23 @@ internal static class Program
         book.RefreshPivotTablesOnOpen = true;
         Check((await book.SaveAsync(path)).IsSuccess(out _, out _), path);
         Expected.Add("18-pivot-template-refreshed.xlsx: file 17 with every sale in Data set to 100, saved with RefreshPivotTablesOnOpen. When Excel has opened it, ByMonth shows Sum of Sales 400 for each month (four regions, 2026 selected) and ByRegion 100 everywhere; Dashboard!F20 = 4 800 once Excel has recalculated.");
+    }
+
+    /// <summary>
+    /// The README gallery (samples/Avig.Kalkyl.Samples), files 19 and on: each must open without
+    /// repair and look like its picture in docs/images/gallery.
+    /// </summary>
+    private static async Task WriteGalleryAsync(string output)
+    {
+        int number = 19;
+
+        foreach (Avig.Kalkyl.Samples.GallerySample sample in Avig.Kalkyl.Samples.Gallery.All)
+        {
+            string name = $"{number}-gallery-{sample.Name}.xlsx";
+            await sample.WriteAsync(Path.Combine(output, name));
+            Expected.Add($"{name}: {sample.Title}. Opens without repair; the sheet {sample.Sheet}, {sample.Range}, looks like docs/images/gallery/{sample.Name}.png.");
+            number++;
+        }
     }
 
     private static async Task AddToCompatibilityFilesAsync(string output)

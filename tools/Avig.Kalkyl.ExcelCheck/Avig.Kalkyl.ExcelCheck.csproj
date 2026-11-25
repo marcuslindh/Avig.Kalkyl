@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Avig.Kalkyl\Avig.Kalkyl.csproj" />
+    <!-- The README gallery; files 19 and on are its workbooks. -->
+    <ProjectReference Include="..\..\samples\Avig.Kalkyl.Samples\Avig.Kalkyl.Samples.csproj" />
   </ItemGroup>
 
   <ItemGroup>

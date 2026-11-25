@@ -26,6 +26,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Avig.Kalkyl\Avig.Kalkyl.csproj" />
+    <!-- The README gallery, which GalleryTests builds and validates. -->
+    <ProjectReference Include="..\..\samples\Avig.Kalkyl.Samples\Avig.Kalkyl.Samples.csproj" />
     <!-- Both as a generator (for the [KalkylRow] types in the tests) and as a plain reference
          (for the tests that run the generator on code that should produce diagnostics). -->
     <ProjectReference Include="..\..\src\Avig.Kalkyl.Generators\Avig.Kalkyl.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />

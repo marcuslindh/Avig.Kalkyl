@@ -27,6 +27,12 @@
           "Avig.OpenXml": "[0.1.6, )",
           "Avig.Result": "[1.0.2, )"
         }
+      },
+      "avig.kalkyl.samples": {
+        "type": "Project",
+        "dependencies": {
+          "Avig.Kalkyl": "[0.1.0, )"
+        }
       }
     }
   }
