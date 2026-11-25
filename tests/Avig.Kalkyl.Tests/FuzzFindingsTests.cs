@@ -422,6 +422,22 @@ public class FuzzFindingsTests
     }
 
     [Theory]
+    [InlineData("A1:'Data'!B2", "A1:'Data'!B2")]
+    [InlineData("=FALSE:'Data'!A1:A3", "FALSE:'Data'!A1:A3")]
+    [InlineData("XFD1:'Other'!B:B", "XFD1:'Other'!B:B")]
+    [InlineData("1+'Data'!A1:A3", "1+Data!A1:A3")]
+    public void A_sheet_name_after_a_colon_stays_quoted_so_it_does_not_become_a_3d_reference(string formula, string expected)
+    {
+        // Found by the smoke run after the 3D fix (formula-shift): A1:'Data'!B2, the area from A1
+        // to Data!B2, was written A1:Data!B2, which reads as the 3D reference 'A1:Data'!B2.
+        Assert.True(FormulaShifter.Shift(formula, 0, 0).IsSuccess(out string? once));
+        Assert.Equal(expected, once);
+
+        Assert.True(FormulaShifter.Shift(once, 0, 0).IsSuccess(out string? twice));
+        Assert.Equal(once, twice);
+    }
+
+    [Theory]
     [InlineData("Jan:Mar!A1", 2, 1, "Jan:Mar!B3")]
     [InlineData("A2:A47485!A1", 38, 49, "'A2:A47485'!AX39")]
     [InlineData("T&A:A2147:A3!AA1", 9, -10, "T&A:'A2147:A3'!Q10")]

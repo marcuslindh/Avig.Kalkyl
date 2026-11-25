@@ -49,13 +49,13 @@ internal sealed record ReferenceToken(
     bool LastRowAbsolute,
     bool LastColumnAbsolute)
 {
-    public string Format()
+    public string Format(bool quoteSheet = false)
     {
         StringBuilder builder = new();
 
         if (Sheet is not null)
         {
-            builder.Append(FormulaLexer.QuoteSheet(Sheet)).Append('!');
+            builder.Append(FormulaLexer.QuoteSheet(Sheet, quoteSheet)).Append('!');
         }
 
         switch (Kind)
@@ -137,8 +137,13 @@ internal static class FormulaLexer
 
     private static readonly string[] ErrorLiterals = ["#GETTING_DATA", "#DIV/0!", "#VALUE!", "#NULL!", "#NAME?", "#SPILL!", "#CALC!", "#REF!", "#NUM!", "#N/A"];
 
-    public static string QuoteSheet(string sheet)
+    public static string QuoteSheet(string sheet, bool always = false)
     {
+        if (always == true)
+        {
+            return "'" + sheet.Replace("'", "''", StringComparison.Ordinal) + "'";
+        }
+
         // A 3D range of two plain names stays as it is (Jan:Mar); otherwise it is quoted whole.
         string[] ends = sheet.Split(':');
 
