@@ -7,15 +7,21 @@ Read, write, edit and calculate Excel `.xlsx` files in .NET. Three ways in, one 
 - **Streaming** — `XlsxReader` and `XlsxWriter` read and write a row at a time with flat memory
   use, however large the file.
 - **Document** — `Workbook` opens a file, lets you change any cell, recalculates formulas with a
-  built-in engine of 300+ functions, and saves it with everything it does not understand (pivot
-  tables, comments, macros, other programs' extensions) left as it was.
+  built-in engine of 300+ functions, and saves it with everything it does not understand
+  (comments, macros, other programs' extensions) left as it was.
 
-Charts, pictures, shapes, conditional formatting, sheet views and hyperlinks can be added with
-the streaming writer and the document model, also to files that already have their own, so a
-dashboard like Excel's templates can be built from code; pivot tables and slicers with the
-document model. Expected failures come back as
-[Avig.Result](https://www.nuget.org/packages/Avig.Result) values instead of exceptions. No
-dependencies besides Avig.Result. Safe for trimming and Native AOT.
+Beyond values and formulas: fonts, fills, number formats, frozen panes, filters and sheet views;
+charts (column, bar, line, area, pie, doughnut, scatter, and combinations of them, styled down to
+the point), pictures including SVG, shapes and groups with gradients, shadows and links,
+conditional formatting and cell links, from both writers and also in files that already have
+their own; pivot tables, slicers and GETPIVOTDATA in the document model. Files from outside are
+read within limits you set, with a strict zip check, and the macros, links and data connections
+they carry are reported and can be taken out. The [gallery](#gallery) shows what that adds up
+to.
+
+Expected failures come back as [Avig.Result](https://www.nuget.org/packages/Avig.Result) values
+instead of exceptions. No dependencies besides Avig.Result and Avig.OpenXml (the package layer it
+shares with Avig.Ord). Safe for trimming and Native AOT.
 
 ```
 dotnet add package Avig.Kalkyl
@@ -36,12 +42,43 @@ code does not have to.
 | Send a file to an HTTP response | `XlsxWriter.CreateAsync(stream)` | [5](#5-write-to-a-stream) |
 | Read a large file, row by row | `XlsxReader`, `SheetReader`, `Row` | [6](#6-read-a-large-file-row-by-row) |
 | Take files that users upload | `KalkylLimits`, `ErrorKind()` | [7](#7-take-files-that-users-upload) |
+| Style cells: fonts, fills, number formats, alignment | `Cell`, `Style` | [9](#9-cells-and-styles) |
 | Create a workbook in memory, with formulas | `Workbook.Create`, `Worksheet` | [11](#11-create-a-workbook-in-memory) |
 | Change cells in an existing file and save it | `Workbook.OpenAsync`, `Worksheet` | [12](#12-edit-an-existing-workbook), [13](#13-open-from-and-save-to-a-stream) |
 | Calculate formulas, or one formula on its own | `RecalculateAsync`, `Evaluate` | [14](#14-calculate-formulas) |
 | Add charts, pictures or conditional formatting | `AddChart`, `AddPicture`, `AddConditionalFormat` | [15](#15-charts)–[17](#17-conditional-formatting) |
 | Build a dashboard: cards, buttons that link to sheets, SVG icons, styled charts | `AddShape`, `AddGroup`, `Picture.FromSvg`, `Chart` options, `SheetView` | [20](#20-shapes-groups-and-dashboards)–[22](#22-sheet-view-and-cell-links) |
-| Find macros, links and connections in a file from outside, and take them out | `Workbook.ActiveContent`, `RemoveActiveContent` | [19](#19-active-content) |
+| Summarise data in pivot tables with slicers, and read them in formulas | `AddPivotTable`, `AddSlicer`, `GETPIVOTDATA` | [23](#23-pivot-tables-and-slicers) |
+| Find macros, links and connections in a file from outside, and take them out | `Workbook.ActiveContent`, `RemoveActiveContent` | [18](#18-macros), [19](#19-active-content) |
+| Start from a finished workbook | the samples below | [Gallery](#gallery) |
+
+## Gallery
+
+Eight workbooks made with this package alone, as Excel 365 shows them. Each is a `Build()`
+method in [samples/Avig.Kalkyl.Samples](samples/Avig.Kalkyl.Samples) that uses only the public
+API. `dotnet run --project samples/Avig.Kalkyl.Samples` writes them to `artifacts/gallery` and,
+on a machine with Excel, takes these pictures again.
+
+[![A dark project dashboard with a navigation column, four KPI cards, a column chart with a smooth line, a doughnut gauge, a funnel and an area chart](docs/images/gallery/project-dashboard.png)](samples/Avig.Kalkyl.Samples/ProjectDashboard.cs)
+
+**[Project dashboard](samples/Avig.Kalkyl.Samples/ProjectDashboard.cs)** — drawings only: menu
+buttons with SVG icons that link to the other sheets, gradient KPI cards, one month picked out in
+a combination chart, a doughnut gauge, a funnel of stacked bars and a gradient area.
+
+[![A light sales dashboard with Region and Product slicers, four key figures, a monthly column chart, a doughnut, a bar chart and a table of regions](docs/images/gallery/sales-dashboard.png)](samples/Avig.Kalkyl.Samples/SalesDashboard.cs)
+
+**[Sales dashboard](samples/Avig.Kalkyl.Samples/SalesDashboard.cs)** — three pivot tables over
+384 order lines, two slicers that filter them all, and key figures and charts on GETPIVOTDATA,
+so everything follows a click on a slicer.
+
+| | |
+| --- | --- |
+| [![Profit and loss statement](docs/images/gallery/profit-and-loss.png)](samples/Avig.Kalkyl.Samples/ProfitAndLoss.cs) | [![Budget against actual](docs/images/gallery/budget-vs-actual.png)](samples/Avig.Kalkyl.Samples/BudgetVsActual.cs) |
+| **[Profit and loss](samples/Avig.Kalkyl.Samples/ProfitAndLoss.cs)** — subtotals as formulas, colour scales, data bars, arrows against the budget, frozen headings. | **[Budget against actual](samples/Avig.Kalkyl.Samples/BudgetVsActual.cs)** — variance formulas in red and green, cards, and the share of budget used per department. |
+| [![Project plan with a Gantt chart](docs/images/gallery/project-plan.png)](samples/Avig.Kalkyl.Samples/ProjectPlan.cs) | [![Invoice](docs/images/gallery/invoice.png)](samples/Avig.Kalkyl.Samples/Invoice.cs) |
+| **[Project plan](samples/Avig.Kalkyl.Samples/ProjectPlan.cs)** — a Gantt chart in shapes placed in points: bars that fill with progress, milestones, a today line. | **[Invoice](samples/Avig.Kalkyl.Samples/Invoice.cs)** — a Swedish invoice with an SVG logo, line items, VAT and rounding as formulas. |
+| [![Customer and staff scorecard](docs/images/gallery/scorecard.png)](samples/Avig.Kalkyl.Samples/Scorecard.cs) | [![100 000 orders from the streaming writer](docs/images/gallery/large-export.png)](samples/Avig.Kalkyl.Samples/LargeExport.cs) |
+| **[Scorecard](samples/Avig.Kalkyl.Samples/Scorecard.cs)** — doughnut gauges, traffic lights, colour scales and data bars per team, a trend against its target. | **[Large export](samples/Avig.Kalkyl.Samples/LargeExport.cs)** — 100 000 rows from the streaming writer with banding, a filter, frozen headings and conditional formatting. |
 
 ## 0. Results instead of exceptions
 
@@ -1221,7 +1258,7 @@ the Values field on rows, and timelines are not supported; files that have them 
 | `CellAddress`, `CellRange` | A cell and a block of cells, 0-based, with Excel's notation in `Parse` and `ToString`. | 10 |
 | `Workbook`, `Worksheet` | The document model: `Create`, `OpenAsync`, `AddSheet`, `Sheet`, `Sheets`, `SaveAsync`; per sheet `sheet[row, column]`, `sheet["C2"]`, `SetValue`, `SetFormula`, `Clear`, `Rows`, `RowCount`, `ColumnCount`, widths, panes, `View`, `AutoFilter` and `Visibility`, and the same `Add…` methods as `SheetWriter`. | 11–13, 22 |
 | `RecalculationScope`, `RecalculationReport` | `RecalculateAsync(Changed or All)` and what it found; `Workbook.Evaluate`, `Culture`, `Uses1904Dates`, `Limits`. | 14 |
-| `Chart`, `ChartSeries`, `ChartType`, `LegendPosition` | `AddChart` on both writers, over cells or at `DrawingBounds`. Legend `None`, `Right`, `Bottom`, `Top` or `Left`. | 15 |
+| `Chart`, `ChartSeries`, `ChartType`, `LegendPosition` | `AddChart` on both writers, over cells or at `DrawingBounds`. Per chart `Title`, `Stacked`, axis titles, `Legend` (`None`, `Right`, `Bottom`, `Top`, `Left`), `HoleSize`, `FirstSliceAngle`, `GapWidth`, `Overlap`, `VaryColors`, `RoundedCorners`, `Background`, `PlotBackground`, `Border`, fonts and axes; per series `Type` (combination charts), `SecondaryAxis`, `Fill`, `Outline`, `Shadow`, `PointColors`, `Smooth`, `Marker`, `MarkerSize` and `DataLabels`. | 15, 21 |
 | `ChartAxis`, `DataLabels`, `DataLabelPosition`, `MarkerStyle` | Chart styling: axes (`Visible`, `Gridlines`, `Minimum`, `Maximum`, `MajorUnit`, `NumberFormat`, `Font`), labels (`ShowValue`, `ShowPercent`, `ShowCategory`, `ShowSeriesName`, `Position`, `NumberFormat`, `Font`), markers (`None`, `Circle`, `Square`, `Diamond`, `Triangle`, `X`, `Star`, `Dash`, `Dot`, `Plus`). | 21 |
 | `Picture`, `PictureFormat` | `FromFileAsync`, `FromBytes`, `FromSvg`, `Format` (`Png`, `Jpeg`, `Gif`, `Svg`), `Width`, `Height`, `Description`, `Link`, `Transparency`, `Shadow`; `AddPicture` on both writers. | 16, 20 |
 | `Shape`, `ShapeKind`, `ShapeText`, `TextRun`, `TextFont` | A shape: `Kind` (`Rectangle`, `RoundedRectangle`, `Ellipse`, `Triangle`, `Diamond`, `Hexagon`, `RightArrow`, `LeftArrow`, `UpArrow`, `DownArrow`, `Chevron`, `Pentagon`, `Line`, `TextBox`), `CornerRadius`, `Fill`, `Outline`, `Shadow`, `InnerShadow`, `SoftEdges`, `Text` (runs, `Horizontal`, `Vertical`, `Wrap`, margins), `Rotation`, flips, `Link`, `Name`, `Description`. `TextFont` also styles chart text. | 20 |
@@ -1303,6 +1340,8 @@ tools/Avig.Kalkyl.Fuzz/corpus-check.ps1                                 # every 
 tools/Avig.Kalkyl.Fuzz/schedule-night.ps1                               # libFuzzer every night in Task Scheduler
 dotnet run -c Release --project tools/Avig.Kalkyl.Benchmarks -- --filter *   # baseline in docs/benchmarks/baseline.md
 dotnet run --project tools/Avig.Kalkyl.ExcelCheck -- C:\temp\excel-check           # files to open in Excel, see docs/excel-checklista.md
+dotnet run --project samples/Avig.Kalkyl.Samples                                   # the gallery's workbooks, and their pictures where Excel is installed
+tools/Avig.Kalkyl.ExcelCheck/open-in-excel.ps1 artifacts/gallery                     # Excel opens each without repair
 ```
 
 ## Licence

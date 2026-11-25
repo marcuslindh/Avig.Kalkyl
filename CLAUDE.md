@@ -22,7 +22,15 @@ dotnet test Avig.Kalkyl.slnx
 # Fuzzning (tools/Avig.Kalkyl.Fuzz, se dess README)
 dotnet run --project tools/Avig.Kalkyl.Fuzz -c Release -- all --smoke
 dotnet run --project tools/Avig.Kalkyl.Fuzz -c Release -- formula-sweep --smoke --iter 110000
+
+# README-galleriet: skriver arbetsböckerna till artifacts/gallery och, med Excel, bilderna
+dotnet run --project samples/Avig.Kalkyl.Samples
 ```
+
+`samples/Avig.Kalkyl.Samples` är README:ns galleri: en fil per arbetsbok, bara publikt API.
+Programmet tar bilderna i `docs/images/gallery` med Excel 365 via COM (`ExcelRenderer`) och
+skriver om PNG:n under 300 KB (`PngOptimizer`). Titta på varje bild efter en ändring.
+`GalleryTests` schemavaliderar och räknar om varje arbetsbok; ExcelCheck skriver dem som fil 19–26.
 
 `tests/Avig.Kalkyl.Compatibility` läser riktiga arbetsböcker från Excel-handledningar
 (hämtas med `download.ps1`, committas inte) med Avig.Kalkyl och ExcelDataReader, ClosedXML,
