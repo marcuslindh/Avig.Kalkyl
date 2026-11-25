@@ -295,10 +295,13 @@ internal static class FormulaTargets
             return;
         }
 
+        // A formula of arrays just under KalkylLimits.MaxArrayCells can take seconds, and time is
+        // the caller's to limit with the token, as the documentation says. So each step gets two
+        // seconds: a cancelled one is not a finding, but one that runs on past the token is, as
+        // libFuzzer's timeout (10 s) then catches it.
         Workbook book = DataWorkbook(out Worksheet data);
-        _ = book.Evaluate(formula, data);
 
-        if (string.IsNullOrWhiteSpace(formula) == true)
+        if (await WithinTimeAsync(token => Task.FromResult(book.Evaluate(formula, data, token))) == false || string.IsNullOrWhiteSpace(formula) == true)
         {
             return;
         }
@@ -306,9 +309,31 @@ internal static class FormulaTargets
         // The same formula in a cell: recalculation, conversion to a cell value and saving.
         data["F1"] = Cell.FromFormula(formula);
         data["F2"] = Cell.FromFormula("F1");
-        await book.RecalculateAsync();
+
+        if (await WithinTimeAsync(token => book.RecalculateAsync(RecalculationScope.Changed, token)) == false)
+        {
+            return;
+        }
+
         await using MemoryStream saved = new();
         await book.SaveAsync(saved);
+    }
+
+    /// <summary>Runs a step with a two-second token; false when the token stopped it.</summary>
+    private static async Task<bool> WithinTimeAsync<T>(Func<CancellationToken, Task<T>> step)
+    {
+        using CancellationTokenSource time = new(TimeSpan.FromSeconds(2));
+
+        try
+        {
+            await step(time.Token);
+
+            return true;
+        }
+        catch (OperationCanceledException) when (time.IsCancellationRequested == true)
+        {
+            return false;
+        }
     }
 
     private static Task ShiftAsync(byte[] input)

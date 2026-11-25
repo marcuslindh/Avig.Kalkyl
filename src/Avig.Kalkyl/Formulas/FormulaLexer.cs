@@ -139,6 +139,25 @@ internal static class FormulaLexer
 
     public static string QuoteSheet(string sheet)
     {
+        // A 3D range of two plain names stays as it is (Jan:Mar); otherwise it is quoted whole.
+        string[] ends = sheet.Split(':');
+
+        if (ends.Length == 2 && IsPlainSheet(ends[0]) == true && IsPlainSheet(ends[1]) == true)
+        {
+            return sheet;
+        }
+
+        if (IsPlainSheet(sheet) == true)
+        {
+            return sheet;
+        }
+
+        return "'" + sheet.Replace("'", "''", StringComparison.Ordinal) + "'";
+    }
+
+    /// <summary>A sheet name that needs no quotes: letters, digits, _ and ., starting with a letter or _, and not a cell address or TRUE or FALSE.</summary>
+    private static bool IsPlainSheet(string sheet)
+    {
         bool plain = sheet.Length > 0 && (char.IsLetter(sheet[0]) == true || sheet[0] == '_');
 
         foreach (char letter in sheet)
@@ -149,12 +168,7 @@ internal static class FormulaLexer
             }
         }
 
-        if (plain == true && CellAddress.TryParse(sheet, out _) == false && string.Equals(sheet, "TRUE", StringComparison.OrdinalIgnoreCase) == false && string.Equals(sheet, "FALSE", StringComparison.OrdinalIgnoreCase) == false)
-        {
-            return sheet;
-        }
-
-        return "'" + sheet.Replace("'", "''", StringComparison.Ordinal) + "'";
+        return plain == true && CellAddress.TryParse(sheet, out _) == false && string.Equals(sheet, "TRUE", StringComparison.OrdinalIgnoreCase) == false && string.Equals(sheet, "FALSE", StringComparison.OrdinalIgnoreCase) == false;
     }
 
     public static Result<List<Token>> Tokenize(string formula)
@@ -483,6 +497,15 @@ internal static class FormulaLexer
 
         string word = formula[position..index];
 
+        // A 3D reference, Sheet1:Sheet3!A1, spans the sheets from the first to the last. Its sheet
+        // name is the whole range, so that it is written back as Excel writes it, quoted whole
+        // when it has to be ('A2:A9'!A1): quoting only one end would make the other a cell or a name.
+        if (TryReadSheetRangeEnd(formula, index, out int bang) == true)
+        {
+            word = formula[position..bang];
+            index = bang;
+        }
+
         if (index < formula.Length && formula[index] == '!')
         {
             if (IsRefError(formula, index + 1) == true)
@@ -563,6 +586,36 @@ internal static class FormulaLexer
     }
 
     /// <summary>A reference starting at a position: a cell, an area, columns (A:C) or rows (1:3).</summary>
+    /// <summary>
+    /// True when a sheet name ending at <paramref name="colon"/> is the first of a 3D range: a
+    /// colon, a second sheet name and the !. <paramref name="bang"/> is where the ! is.
+    /// </summary>
+    private static bool TryReadSheetRangeEnd(string formula, int colon, out int bang)
+    {
+        bang = colon;
+
+        if (colon >= formula.Length || formula[colon] != ':')
+        {
+            return false;
+        }
+
+        int index = colon + 1;
+
+        while (index < formula.Length && (char.IsLetterOrDigit(formula[index]) == true || formula[index] is '_' or '.'))
+        {
+            index++;
+        }
+
+        if (index == colon + 1 || index >= formula.Length || formula[index] != '!')
+        {
+            return false;
+        }
+
+        bang = index;
+
+        return true;
+    }
+
     private static bool TryReadReference(string formula, int position, string? sheet, out ReferenceToken? reference, out int after)
     {
         reference = null;

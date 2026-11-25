@@ -115,6 +115,28 @@ public class FuzzFindingsTests
         Assert.True((await Workbook.OpenAsync(file)).IsFailure(out _, out _));
     }
 
+    [Fact]
+    public async Task Rows_outside_sheetData_are_not_rows_of_the_sheet_in_either_reader()
+    {
+        // Found by the night run (xlsx-part): the document model keeps an unknown element as it is,
+        // and the streaming reader read the rows inside it, so a workbook the package saved was damaged.
+        const string unknown = """<x:extra xmlns:x="urn:example"><row r="1048576"><c r="A1048576"><v>9</v></c></row><row r="2"/></x:extra>""";
+        await using MemoryStream file = File("""<row r="1"><c r="A1"><v>1</v></c></row><row r="3"><c r="A3"><v>3</v></c></row>""", sheetPrefix: unknown);
+
+        List<Row> rows = await TestFiles.ReadRowsAsync(file);
+        Assert.Equal([0, 2], rows.Select(row => row.Index));
+
+        file.Position = 0;
+        Workbook book = await OpenAsync(file);
+        Workbook again = await SaveAndReopenAsync(book);
+        Assert.Equal((CellValue)3, again.Sheets[0][2, 0].Value);
+
+        await using MemoryStream saved = new();
+        await again.SaveAsync(saved);
+        saved.Position = 0;
+        Assert.Equal([0, 2], (await TestFiles.ReadRowsAsync(saved)).Select(row => row.Index));
+    }
+
     [Theory]
     [InlineData("2147483647")]
     [InlineData("0")]
@@ -222,6 +244,21 @@ public class FuzzFindingsTests
     }
 
     [Theory]
+    [InlineData(59.99999999999999, "1900-02-28T00:00:00")]
+    [InlineData(59.9999999999, "1900-02-28T00:00:00")]
+    [InlineData(59.999, "1900-02-28T23:58:33.6")]
+    [InlineData(60.99999999999999, "1900-03-01T00:00:00")]
+    public void A_serial_that_rounds_onto_a_side_of_the_made_up_day_is_read_on_that_side(double serial, string expected)
+    {
+        // Found by the night run (excel-date): 59.99999999999999 was read as before the made-up
+        // 1900-02-29 and then rounded to 1900-03-01, which writes back as 61.
+        Assert.True(ExcelDate.TryFromSerial(serial, false, out DateTime date));
+
+        Assert.Equal(DateTime.Parse(expected, System.Globalization.CultureInfo.InvariantCulture), date);
+        Assert.True(ExcelDate.ToSerial(date) <= Math.Round(serial, 6), "A date never writes back as a later serial than it was read from.");
+    }
+
+    [Theory]
     [InlineData("=REPT(\"\",2147483647)", "")]
     [InlineData("=REPT(\"\",2147483648)", "#VALUE!")]
     [InlineData("=REPT(\"\",1E+15)", "#VALUE!")]
@@ -311,11 +348,59 @@ public class FuzzFindingsTests
     }
 
     [Fact]
+    public async Task A_formula_of_arrays_just_under_the_limit_stops_soon_after_it_is_cancelled()
+    {
+        // Found by the night run (formula, timeouts): each comparison makes a new array of 9 million
+        // values, under KalkylLimits.MaxArrayCells, so a chain of them takes seconds. Time is the
+        // caller's to limit, and the token has to stop it within one row of the array.
+        Workbook book = Workbook.Create();
+        Assert.True(book.AddSheet("Data").IsSuccess(out Worksheet? sheet));
+
+        for (int row = 0; row < 8; row++)
+        {
+            sheet[row, 3] = row;
+        }
+
+        string formula = "rDF:P&6=2^64:811" + string.Concat(Enumerable.Repeat("<D1", 200));
+        using CancellationTokenSource cancel = new(TimeSpan.FromMilliseconds(300));
+        System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Task.Run(() => book.Evaluate(formula, sheet, cancel.Token)));
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3), $"Cancelled after {watch.Elapsed.TotalSeconds:N1} s.");
+
+        sheet["F1"] = Cell.FromFormula(formula);
+        using CancellationTokenSource cancelRecalculation = new(TimeSpan.FromMilliseconds(300));
+        watch.Restart();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => book.RecalculateAsync(RecalculationScope.All, cancelRecalculation.Token));
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(3), $"Recalculation cancelled after {watch.Elapsed.TotalSeconds:N1} s.");
+    }
+
+    [Fact]
     public void A_formula_moved_off_the_sheet_still_parses()
     {
         Assert.True(FormulaShifter.Shift("Other!A1+'Data'!A1:A3", -5, 0).IsSuccess(out string? moved));
 
         Assert.Equal("Other!#REF!+Data!#REF!", moved);
         Assert.True(FormulaParser.Parse(moved).IsSuccess(out _));
+    }
+
+    [Theory]
+    [InlineData("Jan:Mar!A1", 2, 1, "Jan:Mar!B3")]
+    [InlineData("A2:A47485!A1", 38, 49, "'A2:A47485'!AX39")]
+    [InlineData("T&A:A2147:A3!AA1", 9, -10, "T&A:'A2147:A3'!Q10")]
+    [InlineData("SUM('Jan 2026:Mar 2026'!B2:B5)", 1, 0, "SUM('Jan 2026:Mar 2026'!B3:B6)")]
+    public void A_3d_reference_is_one_reference_and_moves_there_and_back(string formula, int rows, int columns, string expected)
+    {
+        // Found by the night run (formula-shift): the first sheet of the range was read as a name
+        // or a cell, and written back so that it read as the other the next time.
+        Assert.True(FormulaShifter.Shift(formula, rows, columns).IsSuccess(out string? moved));
+        Assert.Equal(expected, moved);
+
+        Assert.True(FormulaShifter.Shift(moved, -rows, -columns).IsSuccess(out string? back));
+        Assert.True(FormulaShifter.Shift(formula, 0, 0).IsSuccess(out string? canonical));
+        Assert.Equal(canonical, back);
     }
 }

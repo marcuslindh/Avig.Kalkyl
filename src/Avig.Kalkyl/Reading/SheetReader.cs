@@ -43,10 +43,28 @@ public sealed class SheetReader
         using XmlReader reader = XmlParts.CreateReader(stream);
         CellContext context = new(sharedStrings, styles, uses1904, Info.Name);
         int previousRow = -1;
+        bool inSheetData = false;
 
         while (await CellXml.ReadAsync(reader, context) == true)
         {
-            if (XmlParts.IsElement(reader, "row") == false)
+            // Only the rows in the worksheet's sheetData are rows, as the document model reads
+            // them: a row elsewhere (in an unknown element after sheetData) is kept as it is when
+            // the workbook is saved, and is not part of the sheet.
+            if (reader.Depth == 1 && XmlParts.IsElement(reader, "sheetData") == true)
+            {
+                inSheetData = reader.IsEmptyElement == false;
+
+                continue;
+            }
+
+            if (reader.Depth == 1 && reader.NodeType == XmlNodeType.EndElement && reader.LocalName == "sheetData")
+            {
+                inSheetData = false;
+
+                continue;
+            }
+
+            if (inSheetData == false || XmlParts.IsElement(reader, "row") == false)
             {
                 continue;
             }
