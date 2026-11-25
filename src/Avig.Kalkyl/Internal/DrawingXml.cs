@@ -648,14 +648,14 @@ internal static class DrawingXml
         await xml.WriteEndElementAsync();
     }
 
-    /// <summary>The runs split at each \n into paragraphs; a run split so keeps its font on both sides.</summary>
+    /// <summary>The runs split at each line break (\n, \r\n or \r) into paragraphs; a run split so keeps its font on both sides.</summary>
     private static List<List<TextRun>> Paragraphs(IReadOnlyList<TextRun> runs)
     {
         List<List<TextRun>> paragraphs = [[]];
 
         foreach (TextRun run in runs)
         {
-            string[] lines = run.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+            string[] lines = run.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
 
             for (int index = 0; index < lines.Length; index++)
             {

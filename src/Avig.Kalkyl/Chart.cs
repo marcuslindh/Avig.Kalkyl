@@ -91,6 +91,11 @@ public sealed class ChartSeries
             Color = new Style { Background = color }.Background;
         }
 
+        if (name is not null)
+        {
+            DrawingValues.XmlText(name, nameof(name));
+        }
+
         Name = name;
     }
 
@@ -438,6 +443,11 @@ public sealed record Chart
             if (value is not null && value.Length > 255)
             {
                 throw new ArgumentException("A chart title holds at most 255 characters.", nameof(Title));
+            }
+
+            if (value is not null)
+            {
+                DrawingValues.XmlText(value, nameof(Title));
             }
 
             title = value;

@@ -181,6 +181,24 @@ public class DashboardTests
         Assert.Throws<ArgumentException>(() => new ShapeGroup([]));
         Assert.Throws<ArgumentOutOfRangeException>(() => new SheetView { Zoom = 5 });
         Assert.Throws<ArgumentException>(() => new SheetView { TabColor = "red" });
+
+        // DrawingML text is plain XML text, which cannot hold these; a cell escapes them instead.
+        Assert.Throws<ArgumentException>(() => new TextRun("a\u0001b"));
+        Assert.Throws<ArgumentException>(() => new ShapeText("lone \uD800 half"));
+        Assert.Throws<ArgumentException>(() => new Shape(ShapeKind.Rectangle) { Description = "\u0000" });
+        Assert.Throws<ArgumentException>(() => Hyperlink.ToUrl("https://example.com/") with { Tooltip = "\u001F" });
+        Assert.Throws<ArgumentException>(() => new Chart(ChartType.Column) { Title = "\u0008" });
+        Assert.Throws<ArgumentException>(() => new ChartSeries("\u0002", "B2:B7"));
+        Assert.Equal("tab\tand 😀\r\n", new TextRun("tab\tand 😀\r\n").Text);
+    }
+
+    [Fact]
+    public async Task Line_breaks_in_shape_text_start_paragraphs_whichever_kind_they_are()
+    {
+        string drawing = await DrawingOfAsync(sheet => sheet.AddShape(new Shape(ShapeKind.TextBox) { Text = new ShapeText("one\r\ntwo\rthree\n\nfive") }, "A1:C5"));
+
+        List<string> paragraphs = Regex.Matches(drawing, "<a:p>(.*?)</a:p>").Select(match => string.Concat(Regex.Matches(match.Groups[1].Value, "<a:t>(.*?)</a:t>").Select(text => text.Groups[1].Value))).ToList();
+        Assert.Equal(["one", "two", "three", "", "five"], paragraphs);
     }
 
     [Fact]

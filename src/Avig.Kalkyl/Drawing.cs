@@ -300,7 +300,7 @@ public sealed record TextRun
             throw new ArgumentException($"A text run holds at most {CellValue.MaxTextLength} characters.", nameof(text));
         }
 
-        Text = text;
+        Text = DrawingValues.XmlText(text, nameof(text));
         Font = font;
     }
 
@@ -430,6 +430,11 @@ public sealed record Hyperlink
             if (value is not null && value.Length > 255)
             {
                 throw new ArgumentException("A tooltip holds at most 255 characters.", nameof(Tooltip));
+            }
+
+            if (value is not null)
+            {
+                DrawingValues.XmlText(value, nameof(Tooltip));
             }
 
             tooltip = value;
@@ -723,6 +728,11 @@ public sealed record Shape
         if (value is not null && value.Length > 1000)
         {
             throw new ArgumentException("A drawing's name or alternative text holds at most 1000 characters.", parameter);
+        }
+
+        if (value is not null)
+        {
+            DrawingValues.XmlText(value, parameter);
         }
 
         return value;

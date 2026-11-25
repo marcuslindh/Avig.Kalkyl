@@ -160,16 +160,30 @@ internal static class RoundTripTarget
     {
         await using MemoryStream file = new();
 
+        List<string> shapeTexts = [];
+
         await using (XlsxWriter writer = await XlsxWriter.CreateAsync(file, true))
         {
             Result<SheetWriter> added = await writer.AddSheetAsync("Values");
             added.IsSuccess(out SheetWriter? sheet);
+
+            // The texts go into text boxes too, as their text and their alternative text.
+            foreach (CellValue value in values)
+            {
+                if (value.TryGetText(out string? text) == true && TryTextBox(text, out Shape? box) == true)
+                {
+                    sheet!.AddShape(box, DrawingBounds.FromPoints(0, shapeTexts.Count * 20, 100, 20));
+                    shapeTexts.Add(text);
+                }
+            }
 
             foreach (CellValue[] row in values.Chunk(Columns))
             {
                 await sheet!.WriteRowAsync([.. row.Select(Cell.Of)]);
             }
         }
+
+        CompareShapeTexts(file, shapeTexts);
 
         file.Position = 0;
         Result<XlsxReader> opened = await XlsxReader.OpenAsync(file, true);
@@ -228,6 +242,81 @@ internal static class RoundTripTarget
         {
             Compare("document -> document", index, values[index], again.Sheets[0][index / Columns, index % Columns].Value);
         }
+    }
+
+    /// <summary>
+    /// A text box with the text, or false when the text holds a character XML cannot store
+    /// (a control character, half a surrogate pair): refusing it with an ArgumentException is the
+    /// documented answer, where a cell escapes it instead.
+    /// </summary>
+    private static bool TryTextBox(string text, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Shape? box)
+    {
+        box = null;
+
+        try
+        {
+            box = new Shape(ShapeKind.TextBox) { Text = new ShapeText(text), Description = text[..Math.Min(text.Length, 1000)] };
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Each text box's text, read back from the drawing as Excel reads it (the a:t of each a:p,
+    /// one line per paragraph), and its alternative text, must be the text written, with
+    /// every line break as \n.
+    /// </summary>
+    private static void CompareShapeTexts(MemoryStream file, List<string> texts)
+    {
+        if (texts.Count == 0)
+        {
+            return;
+        }
+
+        file.Position = 0;
+        using System.IO.Compression.ZipArchive archive = new(file, System.IO.Compression.ZipArchiveMode.Read, true);
+        System.IO.Compression.ZipArchiveEntry entry = archive.GetEntry("xl/drawings/drawing1.xml")
+            ?? throw new InvariantViolationException("The sheet has text boxes but no drawing.");
+        System.Xml.Linq.XDocument drawing;
+
+        using (Stream stream = entry.Open())
+        {
+            drawing = System.Xml.Linq.XDocument.Load(stream, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+        }
+
+        List<System.Xml.Linq.XElement> shapes = drawing.Descendants().Where(element => element.Name.LocalName == "sp").ToList();
+
+        if (shapes.Count != texts.Count)
+        {
+            throw new InvariantViolationException($"{texts.Count} text boxes were written and {shapes.Count} read back.");
+        }
+
+        for (int index = 0; index < texts.Count; index++)
+        {
+            string expected = texts[index].Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+            IEnumerable<string> paragraphs = shapes[index].Descendants().Where(element => element.Name.LocalName == "p")
+                .Select(paragraph => string.Concat(paragraph.Descendants().Where(element => element.Name.LocalName == "t").Select(element => element.Value)));
+            string read = string.Join('\n', paragraphs);
+
+            if (read != expected)
+            {
+                throw new InvariantViolationException($"Text box {index + 1} was written as {Describe(CellValue.Text(texts[index]))} and read back as {Describe(CellValue.Text(read))}.");
+            }
+
+            string description = (string?)shapes[index].Descendants().First(element => element.Name.LocalName == "cNvPr").Attribute("descr") ?? string.Empty;
+            string expectedDescription = texts[index][..Math.Min(texts[index].Length, 1000)];
+
+            if (description != expectedDescription)
+            {
+                throw new InvariantViolationException($"Text box {index + 1}'s alternative text was written as {Describe(CellValue.Text(expectedDescription))} and read back as {Describe(CellValue.Text(description))}.");
+            }
+        }
+
+        file.Position = 0;
     }
 
     private static void Compare(string path, int index, CellValue written, CellValue read)

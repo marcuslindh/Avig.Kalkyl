@@ -30,6 +30,33 @@ internal static class DrawingValues
         return "#" + hex.ToUpperInvariant();
     }
 
+    /// <summary>
+    /// Text for a drawing or a chart, which DrawingML stores as plain XML text: a control
+    /// character other than tab and line breaks, or half a surrogate pair, cannot be written, so
+    /// it is an ArgumentException here rather than a failed save later.
+    /// </summary>
+    public static string XmlText(string value, string parameter)
+    {
+        for (int index = 0; index < value.Length; index++)
+        {
+            char current = value[index];
+
+            if (char.IsHighSurrogate(current) == true && index + 1 < value.Length && char.IsLowSurrogate(value[index + 1]) == true)
+            {
+                index++;
+
+                continue;
+            }
+
+            if (System.Xml.XmlConvert.IsXmlChar(current) == false)
+            {
+                throw new ArgumentException($"The text holds the character U+{(int)current:X4} at position {index}, which an XML file cannot store.", parameter);
+            }
+        }
+
+        return value;
+    }
+
     /// <summary>A transparency from 0 (opaque) to 1 (invisible).</summary>
     public static double Transparency(double value, string parameter)
     {
