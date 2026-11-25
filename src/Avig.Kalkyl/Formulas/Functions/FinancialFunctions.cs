@@ -167,7 +167,7 @@ internal static class FinancialFunctions
         {
             if (payment == 0)
             {
-                return Value.Num;
+                return Value.Div0;
             }
 
             return Value.FromNumber(-(present + future) / payment);
@@ -261,6 +261,13 @@ internal static class FinancialFunctions
             return false;
         }
 
+        // A step to -1 or below, where the discount is undefined, goes halfway to -1 instead, so that a rate near -100 %
+        // is still found, as Excel finds it.
+        if (next <= -1)
+        {
+            next = (rate - 1) / 2;
+        }
+
         converged = Math.Abs(next - rate) < RateTolerance;
         rate = next;
 
@@ -292,7 +299,18 @@ internal static class FinancialFunctions
     /// <summary>IRR: Newton's method on the NPV from the guess (0.1); the values need a positive and a negative one.</summary>
     private static Value Irr(FunctionCall call)
     {
-        if (TryRangeNumbers(call, 0, out List<double> values, out Value error) == false || call.TryNumber(1, 0.1, out double guess, out error) == false)
+        if (TryRangeNumbers(call, 0, out List<double> values, out Value error) == false)
+        {
+            // Excel gives #VALUE! for an error among the cash flows, but passes on one written in its place.
+            if (call.IsRangeOrArray(0) == true)
+            {
+                return Value.ValueError;
+            }
+
+            return error;
+        }
+
+        if (call.TryNumber(1, 0.1, out double guess, out error) == false)
         {
             return error;
         }
@@ -337,7 +355,7 @@ internal static class FinancialFunctions
 
     private static Value Xnpv(FunctionCall call)
     {
-        if (call.TryNumber(0, out double rate, out Value error) == false || TryCashFlows(call, 1, out List<double> values, out List<double> dates, out error) == false)
+        if (call.TryNumber(0, out double rate, out Value error) == false || TryCashFlows(call, 1, false, out List<double> values, out List<double> dates, out error) == false)
         {
             return error;
         }
@@ -353,7 +371,7 @@ internal static class FinancialFunctions
     /// <summary>XIRR: Newton's method on XNPV from the guess (0.1), with the dates as serials.</summary>
     private static Value Xirr(FunctionCall call)
     {
-        if (TryCashFlows(call, 0, out List<double> values, out List<double> dates, out Value error) == false || call.TryNumber(2, 0.1, out double guess, out error) == false)
+        if (call.TryNumber(2, 0.1, out double guess, out Value error) == false || TryCashFlows(call, 0, true, out List<double> values, out List<double> dates, out error) == false)
         {
             return error;
         }
@@ -408,30 +426,70 @@ internal static class FinancialFunctions
     }
 
     /// <summary>
-    /// The values and dates of XNPV and XIRR: every item must be a number (#VALUE! otherwise), the
-    /// counts must match and no date may come before the first (#NUM!). Dates are truncated to days.
+    /// The values and dates of XNPV and XIRR, paired by position, with Excel's rules. An error in either comes back
+    /// first, and the counts must match (#NUM!). In a range or array XNPV takes only numbers (#NUM! otherwise), while
+    /// XIRR skips a pair whose value is blank, reads a date written as text, and gives #VALUE! for other text and for
+    /// booleans. A blank that is not skipped is #NUM!, and so is a date before the first. Dates are truncated to days.
     /// </summary>
-    private static bool TryCashFlows(FunctionCall call, int first, out List<double> values, out List<double> dates, out Value error)
+    private static bool TryCashFlows(FunctionCall call, int first, bool internalRate, out List<double> values, out List<double> dates, out Value error)
     {
+        values = [];
         dates = [];
+        error = Value.Blank;
+        List<Value> amounts = [.. call.Values(first)];
+        List<Value> days = [.. call.Values(first + 1)];
+        bool directAmounts = call.IsRangeOrArray(first) == false;
+        bool directDays = call.IsRangeOrArray(first + 1) == false;
 
-        if (TryStrictNumbers(call, first, out values, out error) == false || TryStrictNumbers(call, first + 1, out dates, out error) == false)
+        // The values and then the dates: an error among them, or a value written in their place that is not a number.
+        if (TryFlowArgument(call, amounts, directAmounts, internalRate, false, out error) == false
+            || TryFlowArgument(call, days, directDays, internalRate, true, out error) == false)
         {
             return false;
         }
 
-        if (values.Count != dates.Count || values.Count == 0)
+        if (amounts.Count != days.Count)
         {
             error = Value.Num;
 
             return false;
         }
 
-        for (int index = 0; index < dates.Count; index++)
+        // XNPV over cells that are all blank is #VALUE!, where a single blank among numbers is #NUM!.
+        if (internalRate == false && amounts.Concat(days).All(item => item.IsBlank == true) == true)
         {
-            dates[index] = Math.Truncate(dates[index]);
+            error = Value.ValueError;
 
-            if (dates[index] < 0 || dates[index] < dates[0])
+            return false;
+        }
+
+        for (int index = 0; index < amounts.Count; index++)
+        {
+            if (internalRate == true && amounts[index].IsBlank == true)
+            {
+                continue;
+            }
+
+            if (TryFlowNumber(call, amounts[index], directAmounts, internalRate, false, out double amount, out error) == false
+                || TryFlowNumber(call, days[index], directDays, internalRate, true, out double day, out error) == false)
+            {
+                return false;
+            }
+
+            values.Add(amount);
+            dates.Add(Math.Truncate(day));
+        }
+
+        if (values.Count == 0)
+        {
+            error = Value.Num;
+
+            return false;
+        }
+
+        foreach (double day in dates)
+        {
+            if (day < 0 || day < dates[0])
             {
                 error = Value.Num;
 
@@ -442,12 +500,12 @@ internal static class FinancialFunctions
         return true;
     }
 
-    private static bool TryStrictNumbers(FunctionCall call, int index, out List<double> numbers, out Value error)
+    /// <summary>The first check of the values or the dates of XNPV and XIRR: an error in them, or a single value that is not a number.</summary>
+    private static bool TryFlowArgument(FunctionCall call, List<Value> items, bool direct, bool internalRate, bool isDate, out Value error)
     {
-        numbers = [];
         error = Value.Blank;
 
-        foreach (Value item in call.Values(index))
+        foreach (Value item in items)
         {
             if (item.IsError == true)
             {
@@ -455,14 +513,38 @@ internal static class FinancialFunctions
 
                 return false;
             }
+        }
 
-            if (item.Kind is ValueKind.Blank or ValueKind.Bool)
-            {
-                error = Value.ValueError;
+        if (direct == true && TryFlowNumber(call, items[0], true, internalRate, isDate, out _, out error) == false)
+        {
+            return false;
+        }
 
-                return false;
-            }
+        return true;
+    }
 
+    /// <summary>One value or date of XNPV or XIRR as a number; see <see cref="TryCashFlows"/> for the rules.</summary>
+    private static bool TryFlowNumber(FunctionCall call, Value item, bool direct, bool internalRate, bool isDate, out double number, out Value error)
+    {
+        number = 0;
+        error = Value.Blank;
+
+        if (item.Kind == ValueKind.Number)
+        {
+            number = item.Number;
+
+            return true;
+        }
+
+        if (item.IsBlank == true)
+        {
+            error = Value.Num;
+
+            return false;
+        }
+
+        if (direct == true || (internalRate == true && isDate == true && item.Kind == ValueKind.Text))
+        {
             Value converted = Coerce.ToNumber(item, call.Conversion);
 
             if (converted.IsError == true)
@@ -472,10 +554,19 @@ internal static class FinancialFunctions
                 return false;
             }
 
-            numbers.Add(converted.Number);
+            number = converted.Number;
+
+            return true;
         }
 
-        return true;
+        error = Value.Num;
+
+        if (internalRate == true)
+        {
+            error = Value.ValueError;
+        }
+
+        return false;
     }
 
     /// <summary>The numbers of a range or array argument, skipping text, booleans and blanks as IRR and MIRR do.</summary>

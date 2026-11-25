@@ -383,7 +383,7 @@ public class MathFunctionTests
     [Fact]
     public void Aggregate_mode_finds_the_most_frequent_number()
     {
-        Assert.Equal(2, Formula.Number("=AGGREGATE(13,0,{1,2,2,3,3})"));
+        Assert.Equal(2, Formula.Number("=AGGREGATE(13,0,A1:A5)", ("A1", 1), ("A2", 2), ("A3", 2), ("A4", 3), ("A5", 3)));
     }
 
     [Theory]

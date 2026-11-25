@@ -165,7 +165,15 @@ internal static class DatabaseFunctions
             return false;
         }
 
-        if (database.Rows < 1 || criteria.Rows < 1)
+        if (call.IsMissing(1) == false && call.Scalar(1).IsError == true)
+        {
+            error = call.Scalar(1);
+
+            return false;
+        }
+
+        // The criteria must be cells: Excel gives #VALUE! for an array or a single value.
+        if (database.Rows < 1 || criteria.Rows < 1 || call.Raw(2).Kind != ValueKind.Reference)
         {
             error = Value.ValueError;
 

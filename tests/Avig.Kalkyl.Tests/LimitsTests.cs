@@ -64,7 +64,7 @@ public class LimitsTests
     [Fact]
     public async Task A_part_that_unpacks_to_more_than_its_header_says_is_damaged()
     {
-        await using LimitedStream part = new(new MemoryStream(new byte[100]), 50, "xl/worksheets/sheet1.xml");
+        await using Stream part = Avig.OpenXml.OpcZip.LimitStream(new MemoryStream(new byte[100]), 50, "xl/worksheets/sheet1.xml");
         byte[] buffer = new byte[30];
 
         await part.ReadExactlyAsync(buffer);
@@ -75,7 +75,7 @@ public class LimitsTests
     [Fact]
     public async Task A_part_exactly_as_large_as_its_header_is_read()
     {
-        await using LimitedStream part = new(new MemoryStream(new byte[50]), 50, "part");
+        await using Stream part = Avig.OpenXml.OpcZip.LimitStream(new MemoryStream(new byte[50]), 50, "part");
         await using MemoryStream copy = new();
 
         await part.CopyToAsync(copy);

@@ -28,10 +28,31 @@ Alla fem milstolparna ska vara klara innan 1.0.0 släpps (beslut 2026-11-23, se 
 333 funktioner från början (345 sedan databasfunktionerna lades till 2026-11-24): matematik och trigonometri (79), statistik och fördelningar (106), text (31), information (16), logik (11), datum och tid (25), uppslag och referens (19), finans (27) och teknik (23). Byggt av fem parallella agenter i var sin worktree, en per kategorigrupp, och sammanslaget utan konflikter. 1 490 tester. Kända avvikelser som agenterna själva redovisade:
 
 - AREAS ger alltid 1 och INDEX tar bara område 1, eftersom motorn saknar referenser med flera områden.
-- SUBTOTAL 101–111 beter sig som 1–11, eftersom dolda rader inte följs. AGGREGATE 15–19 ger #VALUE!.
+- SUBTOTAL 101–111 beter sig som 1–11, eftersom dolda rader inte följs.
 - TEXT stöder inte bråkformat (# ?/?) eller villkorsavsnitt ([>100]).
 - DOLLAR visar negativa belopp inom parentes, som i Microsofts exempel.
-- LARGE/SMALL avrundar ett k med decimaler uppåt (som LibreOffice); det är inte kontrollerat mot Excel.
+
+## Jämförelse med Excel 365
+
+2026-11-24 räknades alla konstanta formler i testerna i både Avig.Kalkyl och Excel 365 (16.0, build 20625) via COM. Det var cirka 7 800 formler: de ursprungliga, samma formler med varje argument utbytt mot `#DIV/0!` och mot `"abc"`, och några hundra fall med celler. Jämförelsen hittade drygt 30 avvikelser, och alla är rättade med regressionstester i `ExcelFindingsTests.cs`:
+
+- AND, OR, XOR och MODE hoppar över text som står direkt som argument.
+- AGGREGATE 1–13 kräver referenser, och 15–19 (SMALL, PERCENTILE, QUARTILE) finns nu.
+- SMALL trunkerar k, och LARGE och SMALL ger `#NUM!` för k under 1.
+- VLOOKUP och HLOOKUP söker innan kolumnnumret kontrolleras. En tabell som är ett enda värde ger `#VALUE!` om den är text och annars `#N/A`.
+- XLOOKUP jämför returområdets storlek innan sökningen. Lägena ±1 jämför över typer, och "näst större" tar en tom cell när inget är större. Match_mode 3 är ett reguljärt uttryck. Det körs utan backtracking, så lookaround och bakåtreferenser ger `#VALUE!`.
+- XNPV och XIRR läser celler som Excel: XNPV ger `#NUM!` för allt som inte är tal, medan XIRR hoppar över tomma värden och läser datum skrivna som text. IRR och XIRR hittar räntor nära −100 %.
+- Kantvärden i GAMMA.DIST, BETA.DIST och WEIBULL.DIST, PERMUT(0;0), NPER med ränta och betalning 0, T.INV.2T upp till 2, YEARFRAC bas 1 kring 1900, REPT över 2³¹, NETWORKDAYS.INTL med bara helgdagar, SERIESSUM med tomma celler, databasvillkor som inte är celler, och TEXTBEFORE/TEXTAFTER med instans och match_end.
+
+Kvarstående avvikelser:
+
+- **Två fel samtidigt:** när två argument är fel samtidigt väljer Excel ibland det andra felet. Det gäller till exempel BITAND, DEC2BIN, DELTA, F.DIST, T.DIST och DECIMAL.
+- **CHOOSE:** med en matris som index över referenser ger CHOOSE `#VALUE!`.
+- **Saknade funktioner:** TEXTSPLIT och de gamla namnen BETADIST, BETAINV, CHIDIST, CHIINV, CHITEST, CRITBINOM, FDIST, FINV, FTEST, GAMMADIST, GAMMAINV, HYPGEOMDIST, LOGINV, LOGNORMDIST, NEGBINOMDIST, TDIST, TINV, TTEST, WEIBULL och ZTEST. De ger `#NAME?`.
+- **Tal som blir text** (`1/3&""`) skrivs alltid med punkt. `Workbook.Culture` styr bara hur text läses som tal.
+- **Formler som Excel vägrar:** motorn räknar ut formler som Excel inte låter en skriva in, som RANK med en matris och IFS med ett udda antal argument.
+
+TEXT, DOLLAR och FIXED gick inte att jämföra, eftersom Excel på maskinen är svenskt och formatkoderna där är lokala.
 
 ## Medvetna begränsningar
 
@@ -67,7 +88,7 @@ saknas på byggmaskinen.
 
 ## Att göra före 1.0
 
-- Öppna filer från skrivaren och dokumentmodellen i riktiga Excel och se att de öppnas utan reparation.
+- Gå igenom det i `docs/excel-checklista.md` som kräver ögon: diagrammens utseende, makrona och jämförelsen med originalen. Att filerna öppnas utan reparation och räknar om till samma värden är kontrollerat (2026-11-24).
 - Prova läsaren och dokumentmodellen på riktiga filer från LibreOffice och Google Sheets. Filer från Excel och WPS är provade (kompatibilitetstesterna).
 - Jämför formelmotorn med Excel på fler riktiga arbetsböcker; 400 000 formler från handledningar stämmer nu.
 - Uppfyll de acceptanskriterier i `docs/testplan.md`, avsnitt 8, som kräver en miljö: Excel, libFuzzer och belastningstester i en container.

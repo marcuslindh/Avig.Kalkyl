@@ -10,7 +10,7 @@
 
     The shape check is the whole point. One of the reasons Avig.Kalkyl exists is that NPOI
     and ClosedXML each pull in five to ten packages. The check therefore fails on anything but
-    a package with lib/net10.0/Avig.Kalkyl.dll, a README and exactly one dependency: Avig.Result.
+    a package with lib/net10.0/Avig.Kalkyl.dll, a README and exactly two dependencies: Avig.Result and Avig.OpenXml (the package layer it shares with Avig.Ord).
 
 .PARAMETER NoBump
     Keep the current version instead of bumping the patch number. The workflow runs with this
@@ -158,18 +158,23 @@ if ($SkipVerify) {
         exit 1
     }
 
-    # Avig.Result is the only allowed dependency. Anything else - a zip, XML or image
+    # Avig.Result and Avig.OpenXml are the only allowed dependencies. Anything else - a zip, XML or image
     # library - is exactly what makes NPOI and ClosedXML heavy to pull in.
     $deps = @($nuspec.package.metadata.dependencies.group.dependency) | Where-Object { $_ -ne $null }
-    $foreign = @($deps | Where-Object { $_.id -ne "Avig.Result" })
+    $foreign = @($deps | Where-Object { $_.id -ne "Avig.Result" -and $_.id -ne "Avig.OpenXml" })
     if ($foreign.Count -gt 0) {
-        Write-Host "      FEL: paketet drar in andra beroenden an Avig.Result:" -ForegroundColor Red
+        Write-Host "      FEL: paketet drar in andra beroenden an Avig.Result och Avig.OpenXml:" -ForegroundColor Red
         $foreign | ForEach-Object { Write-Host "        $($_.id) $($_.version)" -ForegroundColor Red }
         exit 1
     }
 
     if (-not ($deps | Where-Object { $_.id -eq "Avig.Result" })) {
         Write-Host "      FEL: beroendet pa Avig.Result saknas i nuspec:en" -ForegroundColor Red
+        exit 1
+    }
+
+    if (-not ($deps | Where-Object { $_.id -eq "Avig.OpenXml" })) {
+        Write-Host "      FEL: beroendet pa Avig.OpenXml saknas i nuspec:en" -ForegroundColor Red
         exit 1
     }
 
@@ -185,7 +190,7 @@ if ($SkipVerify) {
         exit 1
     }
 
-    Write-Host "      lib/net10.0/Avig.Kalkyl.dll, README.md och licens finns, bara Avig.Result som beroende" -ForegroundColor Green
+    Write-Host "      lib/net10.0/Avig.Kalkyl.dll, README.md och licens finns, bara Avig.Result och Avig.OpenXml som beroenden" -ForegroundColor Green
 }
 
 # --- [5/5] Copy to the local feed ---

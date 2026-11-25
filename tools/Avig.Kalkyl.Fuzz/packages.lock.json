@@ -18,6 +18,14 @@
           "dnlib": "4.4.0"
         }
       },
+      "Avig.OpenXml": {
+        "type": "Transitive",
+        "resolved": "0.1.4",
+        "contentHash": "AVXabGVaoUcfhiZI2rUhko+aHxLwEswl1kap6OyPQpATeU0Eevi0fPjWaiGgOvS3BGRp1iZaQZPdEcQDDcbc6w==",
+        "dependencies": {
+          "Avig.Result": "1.0.2"
+        }
+      },
       "Avig.Result": {
         "type": "Transitive",
         "resolved": "1.0.2",
@@ -36,6 +44,7 @@
       "avig.kalkyl": {
         "type": "Project",
         "dependencies": {
+          "Avig.OpenXml": "[0.1.4, )",
           "Avig.Result": "[1.0.2, )"
         }
       }

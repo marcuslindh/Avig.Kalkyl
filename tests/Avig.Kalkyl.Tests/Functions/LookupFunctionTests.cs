@@ -143,7 +143,7 @@ public class LookupFunctionTests
     [InlineData("=LOOKUP(0,{4.14,4.19},{1,2})", "#N/A")]
     [InlineData("=XLOOKUP(999,A1:A5,C1:C5)", "#N/A")]
     [InlineData("=XLOOKUP(101,A1:A5,C1:C4)", "#VALUE!")]
-    [InlineData("=XLOOKUP(101,A1:A5,C1:C5,,3)", "#VALUE!")]
+    [InlineData("=XLOOKUP(101,A1:A5,C1:C5,,4)", "#VALUE!")]
     [InlineData("=XLOOKUP(101,A1:A5,C1:C5,,0,0)", "#VALUE!")]
     [InlineData("=XMATCH(\"b*\",{\"apple\",\"banana\"})", "#N/A")]
     [InlineData("=XMATCH(1,{1,2;3,4})", "#VALUE!")]

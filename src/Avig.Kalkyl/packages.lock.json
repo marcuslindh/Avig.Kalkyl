@@ -8,6 +8,15 @@
         "resolved": "1.2.0",
         "contentHash": "dnpDYQFgf2MP3lUiJFeU63kvHIEUXzeeNSMUmnwjtv9owVDei59aI8MYFdZL8dUcwUBE3Tr3QllcQoImMWOsTA=="
       },
+      "Avig.OpenXml": {
+        "type": "Direct",
+        "requested": "[0.1.4, )",
+        "resolved": "0.1.4",
+        "contentHash": "AVXabGVaoUcfhiZI2rUhko+aHxLwEswl1kap6OyPQpATeU0Eevi0fPjWaiGgOvS3BGRp1iZaQZPdEcQDDcbc6w==",
+        "dependencies": {
+          "Avig.Result": "1.0.2"
+        }
+      },
       "Avig.Result": {
         "type": "Direct",
         "requested": "[1.0.2, )",

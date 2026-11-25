@@ -77,7 +77,7 @@ internal static class StatisticalFunctionsDistributions
         total = Math.Truncate(total);
         chosen = Math.Truncate(chosen);
 
-        if (total <= 0 || chosen < 0 || total < chosen)
+        if (total < 0 || chosen < 0 || total < chosen)
         {
             return Value.Num;
         }
@@ -407,6 +407,12 @@ internal static class StatisticalFunctionsDistributions
             return Value.FromNumber(-double.ExpM1(-power));
         }
 
+        // Excel's density at 0 is 0 whatever the shape.
+        if (number == 0)
+        {
+            return Value.FromNumber(0);
+        }
+
         return Value.FromNumber(shape / scale * Math.Pow(number / scale, shape - 1) * Math.Exp(-power));
     }
 
@@ -429,6 +435,12 @@ internal static class StatisticalFunctionsDistributions
         if (cumulative == true)
         {
             return Value.FromNumber(Special.GammaP(shape, number / scale));
+        }
+
+        // GAMMA.DIST is #NUM! at 0 for shape 1 as well, where the density is finite; CHISQ.DIST with 2 degrees of freedom is not.
+        if (number == 0 && shape == 1)
+        {
+            return Value.Num;
         }
 
         return Value.FromNumber(GammaDensity(number, shape, scale));
@@ -479,24 +491,16 @@ internal static class StatisticalFunctionsDistributions
             return Value.FromNumber(Special.BetaRegularized(alpha, beta, scaled));
         }
 
+        // At the ends of the interval Excel looks at x itself, not at x scaled to [0, 1]: #NUM! where x is 0
+        // and alpha is at most 1, or x is 1 and beta is at most 1; 0 everywhere else, also where the density is finite.
         if (scaled == 0 || scaled == 1)
         {
-            double edgeExponent = alpha;
-
-            if (scaled == 1)
-            {
-                edgeExponent = beta;
-            }
-
-            if (edgeExponent < 1)
+            if ((number == 0 && alpha <= 1) || (number == 1 && beta <= 1))
             {
                 return Value.Num;
             }
 
-            if (edgeExponent > 1)
-            {
-                return Value.FromNumber(0);
-            }
+            return Value.FromNumber(0);
         }
 
         double logDensity = ((alpha - 1) * Math.Log(scaled)) + ((beta - 1) * Math.Log(1 - scaled)) - Special.LogBeta(alpha, beta);
@@ -627,9 +631,15 @@ internal static class StatisticalFunctionsDistributions
             return error;
         }
 
-        if (probability <= 0 || probability > 1)
+        // Excel takes probabilities up to 2: above 1 the value is in the lower half and negative.
+        if (probability <= 0 || probability >= 2)
         {
             return Value.Num;
+        }
+
+        if (probability > 1)
+        {
+            return Value.FromNumber(-TUpperInverse(1 - (probability / 2), freedom));
         }
 
         return Value.FromNumber(TUpperInverse(probability / 2, freedom));

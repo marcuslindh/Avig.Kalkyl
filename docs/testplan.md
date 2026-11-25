@@ -102,7 +102,7 @@ Alla brister i tabellen ovan är åtgärdade och har regressionstester i
 
 Det som återstår kräver en miljö eller ett beslut:
 
-- **FUN-04:** öppna filerna i riktiga Excel. `tools/Avig.Kalkyl.ExcelCheck` skapar filerna, och de är kontrollerade mot schemat. Fil 10–12 (diagram, bilder och villkorsstyrd formatering, också tillagda i de 38 handledningsfilerna) gav inga nya schemafel 2026-11-24, och filernas egna diagram, bilder och regler fanns kvar. Följ `docs/excel-checklista.md`. Excel finns inte på byggmaskinen, så en person måste göra genomgången.
+- **FUN-04:** öppna filerna i riktiga Excel. `tools/Avig.Kalkyl.ExcelCheck` skapar filerna, och de är kontrollerade mot schemat. Fil 10–12 (diagram, bilder och villkorsstyrd formatering, också tillagda i de 38 handledningsfilerna) gav inga nya schemafel 2026-11-24, och filernas egna diagram, bilder och regler fanns kvar. Samma dag öppnades alla 84 filer automatiskt i Excel 365 (16.0, build 20625) via COM. Ingen fil behövde repareras eller vägrades. En kontrollfil med en trasig rad vägrades, vilket visar att kontrollen fungerar. Efter full omräkning (Ctrl+Alt+F9) hade inga värden ändrats, utom de som beror på `RANDBETWEEN` i `class-correlation`. Det som kräver ögon i `docs/excel-checklista.md` återstår: diagrammens och formateringens utseende, makrona i fil 07 och 08 och jämförelsen med originalen.
 - **FUZ-01:** libFuzzer är installerat och har körts i tre minuter per paketmål (se nedan). En hel natt med `tools/Avig.Kalkyl.Fuzz/fuzz-night.ps1` återstår. `schedule-night.ps1` lägger den i Schemaläggaren varje natt.
 - **SEC-03 i full storlek, SEC-05, PRF-02 och P-07 till P-09:** de kräver en isolerad container
   och kör i timmar.

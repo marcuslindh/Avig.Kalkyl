@@ -618,7 +618,22 @@ public sealed class MappedRow
             return Enum.TryParse(name, out value) && Enum.IsDefined(value);
         }
 
-        return cell.TryGetText(out string? text) && Enum.TryParse(text.Trim(), true, out value) && Enum.IsDefined(value);
+        if (cell.TryGetText(out string? text) == false)
+        {
+            return false;
+        }
+
+        string trimmed = text.Trim();
+
+        // Blank text is an empty cell, as it is for numbers and dates.
+        if (trimmed.Length == 0)
+        {
+            empty = true;
+
+            return true;
+        }
+
+        return Enum.TryParse(trimmed, true, out value) && Enum.IsDefined(value);
     }
 
     private bool TryReadInteger(int column, long minimum, long maximum, out long value, out bool empty)
@@ -782,7 +797,22 @@ public sealed class MappedRow
             return true;
         }
 
-        return cell.TryGetText(out string? text) && Guid.TryParse(text.Trim(), out value);
+        if (cell.TryGetText(out string? text) == false)
+        {
+            return false;
+        }
+
+        string trimmed = text.Trim();
+
+        // Blank text is an empty cell, as it is for numbers and dates.
+        if (trimmed.Length == 0)
+        {
+            empty = true;
+
+            return true;
+        }
+
+        return Guid.TryParse(trimmed, out value);
     }
 
     private bool Optional(int column)

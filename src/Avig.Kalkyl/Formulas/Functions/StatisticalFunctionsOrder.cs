@@ -86,7 +86,7 @@ internal static class StatisticalFunctionsOrder
     /// <summary>MODE: the most frequent number, the first one when several tie; #N/A when no number repeats.</summary>
     private static Value Mode(FunctionCall call)
     {
-        if (call.TryCollectNumbers(0, false, out List<double> numbers, out Value error) == false)
+        if (call.TryCollectNumbers(0, false, out List<double> numbers, out Value error, skipText: true) == false)
         {
             return error;
         }
@@ -104,7 +104,7 @@ internal static class StatisticalFunctionsOrder
     /// <summary>MODE.MULT: every most frequent number, as a vertical array.</summary>
     private static Value ModeMultiple(FunctionCall call)
     {
-        if (call.TryCollectNumbers(0, false, out List<double> numbers, out Value error) == false)
+        if (call.TryCollectNumbers(0, false, out List<double> numbers, out Value error, skipText: true) == false)
         {
             return error;
         }
@@ -134,9 +134,23 @@ internal static class StatisticalFunctionsOrder
             return error;
         }
 
-        double rank = Math.Ceiling(position);
+        return Nth(numbers, position, largest);
+    }
 
-        if (numbers.Count == 0 || rank < 1 || rank > numbers.Count)
+    /// <summary>
+    /// The k-th largest or smallest number. Excel truncates k for SMALL and counts LARGE from the top,
+    /// so LARGE rounds k up; below 1 or past the count both are #NUM!.
+    /// </summary>
+    internal static Value Nth(List<double> numbers, double position, bool largest)
+    {
+        double rank = Math.Floor(position);
+
+        if (largest == true)
+        {
+            rank = Math.Ceiling(position);
+        }
+
+        if (numbers.Count == 0 || position < 1 || rank > numbers.Count)
         {
             return Value.Num;
         }
@@ -203,7 +217,7 @@ internal static class StatisticalFunctionsOrder
     /// The k-th percentile with linear interpolation: the inclusive form puts it at k·(n−1) in the
     /// sorted values (k in [0, 1]); the exclusive form at k·(n+1) − 1, which must lie inside them.
     /// </summary>
-    private static Value Percentile(List<double> numbers, double fraction, bool exclusive)
+    internal static Value Percentile(List<double> numbers, double fraction, bool exclusive)
     {
         if (numbers.Count == 0 || fraction < 0 || fraction > 1)
         {
@@ -248,6 +262,12 @@ internal static class StatisticalFunctionsOrder
             return error;
         }
 
+        return Quartile(numbers, quart, exclusive);
+    }
+
+    /// <summary>The quartile of the numbers; quart is truncated.</summary>
+    internal static Value Quartile(List<double> numbers, double quart, bool exclusive)
+    {
         double whole = Math.Truncate(quart);
 
         if (whole < 0 || whole > 4 || (exclusive == true && (whole < 1 || whole > 3)))

@@ -60,4 +60,4 @@ test i `CompatibilityFindingsTests.cs` eller `HostileFilesTests.cs` innan det r�
 
 | Datum | Excel-version (Arkiv > Konto > Om Excel) | Godkända | Fel |
 |---|---|---|---|
-| | | | |
+| 2026-11-24 | 16.0, build 20625 (automatiskt via COM) | Steg 1 och 3 för alla 84 filer: ingen reparation, och samma värden efter omräkning. Steg 2 och det visuella i tabellen är inte gjort. Fil 07 och 08 saknades, eftersom ingen `.xlsm` angavs. | Inga |

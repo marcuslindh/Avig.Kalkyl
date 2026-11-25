@@ -207,7 +207,8 @@ public class CompatibilityFindingsTests
     [Fact]
     public void DGET_gives_the_one_match_or_an_error()
     {
-        Assert.Equal((CellValue)"Bo", Formula.Evaluate("=DGET(A1:C5,\"Name\",{\"Region\";\"West\"})", Database));
+        Assert.Equal((CellValue)"Bo", Formula.Evaluate("=DGET(A1:C5,\"Name\",L1:L2)", [.. Database, ("L1", "Region"), ("L2", "West")]));
+        Assert.Equal(CellValue.Error("#VALUE!"), Formula.Evaluate("=DGET(A1:C5,\"Name\",{\"Region\";\"West\"})", Database));
         Assert.Equal(CellValue.Error("#NUM!"), Formula.Evaluate("=DGET(A1:C5,\"Name\",H1:H2)", Database));
         Assert.Equal(CellValue.Error("#VALUE!"), Formula.Evaluate("=DGET(A1:C5,\"Name\",{\"Region\";\"South\"})", Database));
         Assert.Equal(CellValue.Error("#VALUE!"), Formula.Evaluate("=DGET(A1:C5,\"Nobody\",H1:H2)", Database));
