@@ -89,6 +89,21 @@ vara verifierat genom sabotage (tabellen i README:n).
   den som finns, och nya regler läggs efter de befintliga med högre `priority`. Regelstilarna
   blir `dxf`-poster i `StyleRegistry`. Strict OOXML får inga ritningar. Testerna finns i
   `DrawingTests.cs`; Excel-checkfil 10–12 visar dem i riktiga Excel.
+- **Former, grupper, SVG och diagramval.** `DrawingXml` skriver ankare (cellområde, cell med
+  storlek, eller `absoluteAnchor` för `DrawingBounds`) och former, bilder och grupper;
+  `ChartXml` skriver diagramdelarna. Under skrivningen samlar `DrawingContext` id:n för former,
+  diagram, bilder och länkar (samma bild och samma länk delar en relation), och
+  `DrawingPackage` skriver delarna efter ritningen, eftersom en zip bara har en post öppen.
+  Varje element skrivs i schemats ordning, som Excel kontrollerar; ett diagramval som Excel
+  skulle reparera (etikettposition som typen inte tar, typer som inte går att kombinera) ger
+  `ArgumentException` i `Chart.Validate`. En länk inuti arbetsboken är relationen
+  `#'Blad'!A1` utan `TargetMode`, som Excel skriver den. `SheetView` och cellänkar skrivs av
+  `SheetXml`; i en öppnad fil skrivs `sheetViews`, `sheetPr` och `hyperlinks` om med filens
+  eget element som utgångspunkt (`patches` i `WritePatchedSheetAsync`), så att det modellen
+  inte känner till blir kvar. Testerna finns i `DashboardTests.cs`, dashboarden i
+  `DashboardWorkbook.cs` (också ExcelCheck-fil 14–15), och fil 16 har varje val.
+  `tools/Avig.Kalkyl.ExcelCheck/open-in-excel.ps1` öppnar filerna i Excel via COM och säger om
+  Excel vägrar eller reparerar.
 
 - **Pivottabeller och utsnitt** finns bara i dokumentmodellen. `PivotRegistry` (i `Workbook.Pivots`)
   håller dem som lagts till och dem filen hade (`PivotReader`, bara definitionerna, inte posterna).

@@ -55,6 +55,8 @@ internal static class Program
         await WriteChartsWithDocumentAsync(Path.Combine(output, "11-charts-document.xlsx"));
         await AddToCompatibilityFilesAsync(output);
         await WriteActiveContentRemovedAsync(Path.Combine(output, "13-active-content-removed.xlsx"));
+        await WriteDashboardAsync(Path.Combine(output, "14-dashboard-document.xlsx"), Path.Combine(output, "15-dashboard-writer.xlsx"));
+        await WriteDrawingOptionsAsync(Path.Combine(output, "16-drawing-options.xlsx"));
         await WritePivotDashboardAsync(Path.Combine(output, "17-pivot-dashboard.xlsx"));
         await WritePivotTemplateAsync(Path.Combine(output, "17-pivot-dashboard.xlsx"), Path.Combine(output, "18-pivot-template-refreshed.xlsx"));
         await File.WriteAllLinesAsync(Path.Combine(output, "expected.txt"), Expected);
@@ -354,6 +356,141 @@ internal static class Program
     /// DDE link, a linked picture, a query table on a connection and a Power Query query), saved
     /// after RemoveActiveContent. Only the cleaned file is written.
     /// </summary>
+    /// <summary>The dashboard the tests build, from the document model and from the streaming writer.</summary>
+    private static async Task WriteDashboardAsync(string documentPath, string writerPath)
+    {
+        Workbook book = Avig.Kalkyl.Tests.DashboardWorkbook.Build();
+        Check((await book.SaveAsync(documentPath)).IsSuccess(out _, out _), documentPath);
+        Result<XlsxWriter> created = await XlsxWriter.CreateAsync(writerPath);
+        Check(created.IsSuccess(out XlsxWriter? writer), created.Error);
+
+        await using (writer)
+        {
+            await Avig.Kalkyl.Tests.DashboardWorkbook.WriteAsync(writer);
+        }
+
+        Expected.Add("14-dashboard-document.xlsx: opens on Dashboard, a dark page without gridlines or row and column headers at 90 % zoom, its tab blue. Left: a navigation column with 'PROJECT DASHBOARD' (DASHBOARD in turquoise), a thin line, and four rounded buttons with an SVG icon each (Projects, Tasks, Budget, Data); a click on a button goes to A1 of that sheet, and each of those sheets has a link back in A3. A round help icon at the bottom links to learn.microsoft.com. Top: four KPI cards with gradients and shadows (24, 780, 62 %, 18), each with a small turquoise up arrow; the last has an inner shadow. Middle: a column chart of tasks per month with August in turquoise, value labels in the columns and the plan as a smooth orange line; beside it a doughnut gauge (72 % turquoise, a thick ring) with '72 %' in the middle. Bottom: a centred funnel of five bars (Leads widest at the top, Won at the bottom) with white labels, and a smooth turquoise line with markers over a blue gradient area. Charts have no border or white background. Data!O1 links to learn.microsoft.com.");
+        Expected.Add("15-dashboard-writer.xlsx: the same dashboard from the streaming writer; it opens on Data, since Data is written first. Must look as 14.");
+    }
+
+    /// <summary>
+    /// Every shape kind, dash, effect and chart option at least once, from the streaming writer,
+    /// so that Excel judges each: a file it repairs here names an option to fix.
+    /// </summary>
+    private static async Task WriteDrawingOptionsAsync(string path)
+    {
+        Result<XlsxWriter> created = await XlsxWriter.CreateAsync(path);
+        Check(created.IsSuccess(out XlsxWriter? writer), created.Error);
+
+        await using (writer)
+        {
+            Result<SheetWriter> added = await writer.AddSheetAsync("Options");
+            Check(added.IsSuccess(out SheetWriter? sheet), added.Error);
+            sheet.SetView(new SheetView { Zoom = 80, TabColor = "#00B050", ActiveCell = new CellAddress(1, 1) });
+            sheet.FreezePanes(1);
+            sheet.AddHyperlink("E1", Hyperlink.ToCell("Right to left", "B2") with { Tooltip = "The other sheet" });
+            sheet.AddHyperlink("F1", Hyperlink.ToUrl("https://example.com/"));
+            await sheet.WriteRowAsync(["Month", "Done", "Plan", "Share", "Link to the other sheet", "Link to example.com"]);
+
+            for (int row = 1; row <= 6; row++)
+            {
+                await sheet.WriteRowAsync(["M" + row.ToString(System.Globalization.CultureInfo.InvariantCulture), 10 * row, 12 * row - 5, 0.1 * row]);
+            }
+
+            int index = 0;
+
+            foreach (ShapeKind kind in Enum.GetValues<ShapeKind>())
+            {
+                LineDash dash = (LineDash)(index % Enum.GetValues<LineDash>().Length);
+                Shape shape = new(kind)
+                {
+                    Fill = Fill.Gradient(index * 25, new GradientStop(0, "#2384F9"), new GradientStop(0.6, "#605776", 0.2), new GradientStop(1, "#00C5AE")),
+                    Outline = new Outline("#1F2940", 1.5) { Dash = dash },
+                    Shadow = new Shadow { Angle = index * 30 % 360 },
+                    InnerShadow = new Shadow { Blur = 6, Transparency = 0.5 },
+                    SoftEdges = index % 3,
+                    Rotation = index * 7,
+                    CornerRadius = 0.3,
+                    Text = new ShapeText([new TextRun(kind.ToString() + "\n", new TextFont { Bold = true, Color = "#FFFFFF" }), new TextRun(dash.ToString(), new TextFont { Italic = true, Size = 8, Name = "Consolas" })]),
+                    Link = Hyperlink.ToCell("Right to left", "A1"),
+                    Description = kind + " with a " + dash + " outline",
+                };
+
+                if (kind == ShapeKind.Line)
+                {
+                    shape = new Shape(kind) { Outline = new Outline("#C00000", 3) { Dash = dash }, FlipHorizontal = true };
+                }
+
+                sheet.AddShape(shape, DrawingBounds.FromPoints(20 + (index % 5) * 130, 160 + (index / 5) * 80, 120, 70));
+                index++;
+            }
+
+            Result<Picture> read = Picture.FromSvg("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#E1541C"/></svg>"""u8);
+            Check(read.IsSuccess(out Picture? svg), read.Error);
+            sheet.AddPicture(svg with { Transparency = 0.4, Shadow = new Shadow(), Link = Hyperlink.ToUrl("https://example.com/"), Description = "Orange dot" }, DrawingBounds.FromPoints(680, 160, 60, 60));
+            sheet.AddPicture(Gradient() with { Transparency = 0.5 }, "M12");
+
+            ChartSeries done = new("Done", "B2:B7", "A2:A7", "#3A4A6B");
+            ChartSeries planLine = new("Plan", "C2:C7", "A2:A7") { Type = ChartType.Line, Smooth = true, Marker = MarkerStyle.Triangle, MarkerSize = 9, Outline = new Outline("#E1541C", 2.5) { Dash = LineDash.Dash } };
+
+            ChartSeries share = new("Share", "D2:D7", "A2:A7") { Type = ChartType.Area, SecondaryAxis = true, Fill = Fill.Gradient(90, new GradientStop(0, "#00C5AE", 0.3), new GradientStop(1, "#00C5AE", 1)) };
+
+            Chart[] charts =
+            [
+                new(ChartType.Column)
+                {
+                    Title = "Combination, secondary axis",
+                    Series = [done, planLine, share],
+                    GapWidth = 40,
+                    Overlap = -20,
+                    RoundedCorners = true,
+                    Background = Fill.Gradient("#FFFFFF", "#DDEBF7"),
+                    PlotBackground = Fill.Solid("#FFFFFF", 0.5),
+                    Border = new Outline("#1F2940", 1) { Dash = LineDash.RoundDot },
+                    Font = new TextFont { Name = "Segoe UI", Size = 9, Color = "#404040" },
+                    TitleFont = new TextFont { Size = 14, Bold = true, Color = "#1F2940" },
+                    LegendFont = new TextFont { Italic = true },
+                    Legend = LegendPosition.Bottom,
+                    ValueAxis = new ChartAxis { Minimum = 0, Maximum = 80, MajorUnit = 20, GridlineOutline = new Outline("#BFBFBF", 0.5) { Dash = LineDash.Dash }, NumberFormat = "0\" t\"" },
+                    CategoryAxis = new ChartAxis { Gridlines = true, Line = new Outline("#7F7F7F", 1.5) },
+                    SecondaryValueAxis = new ChartAxis { Maximum = 1, NumberFormat = "0%", Font = new TextFont { Color = "#00C5AE" } },
+                    CategoryAxisTitle = "Month",
+                    ValueAxisTitle = "Tasks",
+                },
+                new(ChartType.Column) { Title = "Labels inside the end", Series = [new ChartSeries("Done", "B2:B7", "A2:A7") { PointColors = [null, null, null, "#00C5AE"], DataLabels = new DataLabels { Position = DataLabelPosition.InsideEnd, Font = new TextFont { Color = "#FFFFFF", Bold = true } } }], DataLabels = new DataLabels { Position = DataLabelPosition.OutsideEnd } },
+                new(ChartType.Bar) { Title = "Stacked, labels in the middle", Stacked = true, Series = [new ChartSeries("Spacer", "B2:B7", "A2:A7") { Fill = Fill.None }, new ChartSeries("Plan", "C2:C7", "A2:A7", "#605776")], DataLabels = new DataLabels { Position = DataLabelPosition.Center }, GapWidth = 10, ValueAxis = new ChartAxis { Visible = false, Gridlines = false } },
+                new(ChartType.Column) { Title = "Labels at the base", Series = [new ChartSeries("Done", "B2:B7", "A2:A7") { Outline = new Outline("#000000", 1), Shadow = new Shadow() }], DataLabels = new DataLabels { Position = DataLabelPosition.InsideBase, ShowCategory = true } },
+                new(ChartType.Line) { Title = "Labels above, below, left, right", Series = [new ChartSeries("Above", "B2:B7", "A2:A7") { DataLabels = new DataLabels { Position = DataLabelPosition.Above } }, new ChartSeries("Below", "C2:C7", "A2:A7") { Marker = MarkerStyle.None, DataLabels = new DataLabels { Position = DataLabelPosition.Below } }, new ChartSeries("Left", "B2:B7", "A2:A7") { Marker = MarkerStyle.Star, DataLabels = new DataLabels { Position = DataLabelPosition.Left } }, new ChartSeries("Right", "C2:C7", "A2:A7") { Marker = MarkerStyle.X, Smooth = true, DataLabels = new DataLabels { Position = DataLabelPosition.Right, NumberFormat = "0.0" } }] },
+                new(ChartType.Pie) { Title = "Pie, best fit, percent", Series = [new ChartSeries("Share", "D2:D7", "A2:A7") { PointColors = ["#2384F9", "#605776", "#00C5AE"] }], FirstSliceAngle = 45, DataLabels = new DataLabels { Position = DataLabelPosition.BestFit, ShowPercent = true, ShowValue = false, ShowCategory = true } },
+                new(ChartType.Pie) { Title = "Pie, outside the end", Series = [new ChartSeries("Share", "D2:D7", "A2:A7")], VaryColors = true, DataLabels = new DataLabels { Position = DataLabelPosition.OutsideEnd } },
+                new(ChartType.Pie) { Title = "Pie, inside the end, centre", Series = [new ChartSeries("Share", "D2:D7", "A2:A7") { DataLabels = new DataLabels { Position = DataLabelPosition.InsideEnd } }] },
+                new(ChartType.Doughnut) { Title = "Gauge", Series = [new ChartSeries("Share", "D2:D3", "A2:A3", "#FF0000") { PointColors = ["#00C5AE", "#E7E6E6"], Outline = Outline.None }], HoleSize = 80, FirstSliceAngle = 270, Legend = LegendPosition.None, DataLabels = new DataLabels { ShowPercent = true, ShowValue = false } },
+                new(ChartType.Doughnut) { Title = "One colour", Series = [new ChartSeries("Share", "D2:D7", "A2:A7", "#2384F9") { Outline = new Outline("#FFFFFF", 2) }], VaryColors = false, HoleSize = 10 },
+                new(ChartType.Scatter) { Title = "Scatter, smooth, labels centred", Series = [new ChartSeries("Points", "C2:C7", "B2:B7", "#70AD47") { Smooth = true, Marker = MarkerStyle.Diamond, DataLabels = new DataLabels { Position = DataLabelPosition.Center } }], CategoryAxis = new ChartAxis { Minimum = 0, Maximum = 70 }, ValueAxis = new ChartAxis { Visible = false } },
+                new(ChartType.Area) { Title = "Area, stacked", Stacked = true, Series = [new ChartSeries("Done", "B2:B7", "A2:A7") { Fill = Fill.Solid("#2384F9", 0.5) }, new ChartSeries("Plan", "C2:C7", "A2:A7") { Fill = Fill.Gradient("#605776", "#FFFFFF") }], DataLabels = new DataLabels(), Legend = LegendPosition.Top },
+            ];
+
+            for (int chart = 0; chart < charts.Length; chart++)
+            {
+                Result chartAdded = sheet.AddChart(charts[chart], DrawingBounds.FromPoints(20 + (chart % 3) * 330, 420 + (chart / 3) * 230, 320, 220));
+
+                if (chartAdded.IsFailure(out string? reason, out _) == true)
+                {
+                    throw new InvalidOperationException(reason);
+                }
+            }
+
+            Result<SheetWriter> other = await writer.AddSheetAsync("Right to left");
+            Check(other.IsSuccess(out SheetWriter? rightToLeft), other.Error);
+            rightToLeft.SetView(new SheetView { RightToLeft = true, ShowGridLines = false, ShowHeaders = false, Zoom = 150, TabColor = "#C00000", ActiveCell = new CellAddress(1, 1) });
+            rightToLeft.AddHyperlink("B2", Hyperlink.ToCell("Options", "A1"));
+            await rightToLeft.WriteRowAsync(["A1 is on the right"]);
+            await rightToLeft.WriteRowAsync([Cell.Empty, Cell.Of("Back to Options").Underline().FontColor("#0563C1")]);
+        }
+
+        Expected.Add("16-drawing-options.xlsx: sheet Options opens at 80 % with a green tab, row 1 frozen and B2 selected; E1 links to 'Right to left'!B2 (tooltip 'The other sheet'), F1 to example.com. Fourteen shapes, each named with its kind and dash, with three-colour gradients, outlines in the eight dash patterns, shadows, inner shadows, soft edges and small turns; a click on one goes to the other sheet; the line is red, dashed and runs from top right to bottom left. An orange SVG dot, see-through with a shadow, links to example.com; the gradient picture at M12 is half see-through. Twelve charts below, as their titles say: a combination (columns, a dashed smooth orange line with triangles, a turquoise gradient area on a secondary axis on the right with 0 % to 100 %, rounded dotted border, gradient background, 0 to 80 in steps of 20 with ' t' after the numbers); labels inside the end with the fourth column turquoise; a centred stacked bar with an invisible first series; labels at the base with categories; four lines with labels above, below, left and right; three pies (best fit with percent and category, outside the end, inside the end) with the first one's slices blue, purple, turquoise; a gauge with an 80 % hole starting at the left; a one-colour blue doughnut with white borders; a smooth scatter without its value axis; a stacked area with labels. Sheet 'Right to left' opens right to left at 150 %, red tab, no gridlines or headers; B2 links back.");
+    }
+
     private static async Task WriteActiveContentRemovedAsync(string path)
     {
         Avig.Kalkyl.Tests.ActiveWorkbook source = new Avig.Kalkyl.Tests.ActiveWorkbook()

@@ -41,7 +41,10 @@ internal static class FormulaShifter
             }
 
             builder.Append(source, copied, token.Start - copied);
-            builder.Append(ShiftReference(token.Reference, rows, columns));
+            // A sheet name straight after a colon is quoted: A1:Data!B2 would read as the 3D
+            // reference 'A1:Data'!B2 the next time, where A1:'Data'!B2 is the area from A1 to Data!B2.
+            bool afterColon = token.Start > offset && source[token.Start - 1] == ':';
+            builder.Append(ShiftReference(token.Reference, rows, columns, afterColon));
             copied = token.Start + token.Text.Length;
         }
 
@@ -50,7 +53,7 @@ internal static class FormulaShifter
         return builder.ToString();
     }
 
-    private static string ShiftReference(ReferenceToken reference, int rows, int columns)
+    private static string ShiftReference(ReferenceToken reference, int rows, int columns, bool quoteSheet)
     {
         int firstRow = Move(reference.FirstRow, reference.FirstRowAbsolute, rows);
         int lastRow = Move(reference.LastRow, reference.LastRowAbsolute, rows);
@@ -63,7 +66,7 @@ internal static class FormulaShifter
         {
             if (reference.Sheet is not null)
             {
-                return FormulaLexer.QuoteSheet(reference.Sheet) + "!#REF!";
+                return FormulaLexer.QuoteSheet(reference.Sheet, quoteSheet) + "!#REF!";
             }
 
             return "#REF!";
@@ -77,7 +80,7 @@ internal static class FormulaShifter
             LastColumn = lastColumn,
         };
 
-        return moved.Format();
+        return moved.Format(quoteSheet);
     }
 
     private static int Move(int value, bool absolute, int delta)

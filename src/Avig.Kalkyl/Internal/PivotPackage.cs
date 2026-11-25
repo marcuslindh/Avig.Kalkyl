@@ -83,7 +83,7 @@ internal sealed class PivotPackage
             string definitionPath = Unused("xl/pivotCache/pivotCacheDefinition", ".xml");
             string recordsPath = Unused("xl/pivotCache/pivotCacheRecords", ".xml");
             await WritePartAsync(definitionPath, xml => PivotXml.WriteCacheDefinitionAsync(xml, data, source, shared, "rId1", pivotCacheId, format => FormatId(styles, format)), cancellationToken);
-            await WritePartAsync(Ooxml.RelationshipsPath(definitionPath), xml => DrawingXml.WriteRelationshipsAsync(xml, [("rId1", PivotXml.PivotCacheRecordsRelationship, "/" + recordsPath)]), cancellationToken);
+            await WritePartAsync(Ooxml.RelationshipsPath(definitionPath), xml => DrawingXml.WriteRelationshipsAsync(xml, [new PartRelationship("rId1", PivotXml.PivotCacheRecordsRelationship, "/" + recordsPath)]), cancellationToken);
             await WritePartAsync(recordsPath, xml => PivotXml.WriteCacheRecordsAsync(xml, data, shared), cancellationToken);
             Overrides.Add(("/" + definitionPath, PivotXml.PivotCacheDefinitionContentType));
             Overrides.Add(("/" + recordsPath, PivotXml.PivotCacheRecordsContentType));
@@ -95,7 +95,7 @@ internal sealed class PivotPackage
                 PivotRendering rendering = pivot.Rendering!;
                 string tablePath = Unused("xl/pivotTables/pivotTable", ".xml");
                 await WritePartAsync(tablePath, xml => PivotXml.WritePivotTableAsync(xml, pivot, rendering, format => FormatId(styles, format)), cancellationToken);
-                await WritePartAsync(Ooxml.RelationshipsPath(tablePath), xml => DrawingXml.WriteRelationshipsAsync(xml, [("rId1", PivotXml.PivotCacheDefinitionRelationship, "/" + definitionPath)]), cancellationToken);
+                await WritePartAsync(Ooxml.RelationshipsPath(tablePath), xml => DrawingXml.WriteRelationshipsAsync(xml, [new PartRelationship("rId1", PivotXml.PivotCacheDefinitionRelationship, "/" + definitionPath)]), cancellationToken);
                 Overrides.Add(("/" + tablePath, PivotXml.PivotTableContentType));
                 SheetParts(pivot.Sheet).Relationships.Add((PivotXml.PivotTableRelationship, "/" + tablePath));
             }

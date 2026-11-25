@@ -41,7 +41,8 @@ public class DrawingTests
         WorksheetPart first = SheetPart(document, "Försäljning 2026");
         Assert.NotNull(first.DrawingsPart);
         Assert.Equal(7, first.DrawingsPart!.ChartParts.Count());
-        Assert.Equal(2, first.DrawingsPart.ImageParts.Count());
+        // The same picture twice is stored once, and both anchors refer to it.
+        Assert.Single(first.DrawingsPart.ImageParts);
         Assert.Equal(12, first.Worksheet!.Elements<Excel.ConditionalFormatting>().Count());
         Assert.Single(SheetPart(document, "Rapport").DrawingsPart!.ChartParts);
     }

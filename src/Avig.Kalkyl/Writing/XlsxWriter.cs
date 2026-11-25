@@ -229,17 +229,23 @@ public sealed class XlsxWriter : IAsyncDisposable
         await sheet.FinishAsync(cancellationToken);
 
         // The sheet's entry is closed now, so the parts its drawing points to can follow it in the zip.
-        if (sheet.Extras.Drawings.Count > 0)
+        if (sheet.Extras.Drawings.Count > 0 || sheet.Extras.ExternalHyperlinks.Any() == true)
         {
-            await WriteDrawingPartsAsync(sheet, cancellationToken);
+            await WriteSheetPartsAsync(sheet, cancellationToken);
         }
     }
 
-    /// <summary>A sheet's drawing, its charts and pictures, and the relationships from the sheet to the drawing and on.</summary>
-    private async Task WriteDrawingPartsAsync(SheetWriter sheet, CancellationToken cancellationToken)
+    /// <summary>A sheet's drawing with its charts and pictures, and the relationships from the sheet to the drawing and its web links.</summary>
+    private async Task WriteSheetPartsAsync(SheetWriter sheet, CancellationToken cancellationToken)
     {
-        string drawingPath = await drawings.WriteDrawingAsync(sheet.Extras.Drawings, cancellationToken);
-        (string, string, string)[] relationships = [(SheetWriter.DrawingRelationshipId, DrawingXml.DrawingRelationship, "/" + drawingPath)];
+        string drawingPath = string.Empty;
+
+        if (sheet.Extras.Drawings.Count > 0)
+        {
+            drawingPath = await drawings.WriteDrawingAsync(sheet.Extras.Drawings, cancellationToken);
+        }
+
+        List<PartRelationship> relationships = sheet.Relationships("/" + drawingPath);
         await WritePartAsync("xl/worksheets/_rels/sheet" + Text(sheet.Index + 1) + ".xml.rels", xml => DrawingXml.WriteRelationshipsAsync(xml, relationships), cancellationToken);
     }
 

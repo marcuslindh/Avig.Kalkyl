@@ -688,6 +688,189 @@ public sealed class ReadmeExamples : IDisposable
     }
 
     [Fact]
+    public async Task Dashboard()
+    {
+        #region example: dashboard
+        if ((await XlsxWriter.CreateAsync("dashboard.xlsx")).IsSuccess(out XlsxWriter? writer) == false)
+        {
+            return;
+        }
+
+        await using (writer)
+        {
+            // A chart refers to sheets written before it, so the data comes first.
+            if ((await writer.AddSheetAsync("Data")).IsFailure(out string? error, out _, out SheetWriter? data) == true)
+            {
+                Console.WriteLine(error);
+
+                return;
+            }
+
+            await data.WriteRowAsync(["Done", 0.72]);
+            await data.WriteRowAsync(["Left", 0.28]);
+
+            if ((await writer.AddSheetAsync("Dashboard")).IsSuccess(out SheetWriter? sheet) == false)
+            {
+                return;
+            }
+
+            // No gridlines or headers: the shapes are the page. Set before the first row.
+            sheet.SetView(new SheetView { ShowGridLines = false, ShowHeaders = false, Zoom = 90, TabColor = "#2384F9" });
+
+            // A card: a rounded rectangle with a gradient, a shadow, two lines of text and a link.
+            Shape card = new(ShapeKind.RoundedRectangle)
+            {
+                Fill = Fill.Gradient("#2384F9", "#605776", angle: 45),
+                Outline = Outline.None,
+                Shadow = new Shadow(),                        // Excel's "Offset: Bottom Right"
+                CornerRadius = 0.12,
+                Text = new ShapeText(
+                [
+                    new TextRun("Projects\n", new TextFont { Size = 11, Color = "#E6ECF5" }),
+                    new TextRun("24", new TextFont { Size = 26, Bold = true, Color = "#FFFFFF" }),
+                ])
+                {
+                    Horizontal = HorizontalAlignment.Left,
+                    MarginLeft = 16,
+                },
+                Link = Hyperlink.ToCell("Data", "A1") with { Tooltip = "Open the data" },
+                Description = "24 projects",
+            };
+
+            sheet.AddShape(card, DrawingBounds.FromPoints(190, 20, 235, 95));   // left, top, width, height
+            sheet.AddShape(new Shape(ShapeKind.UpArrow) { Fill = Fill.Solid("#8BFFF7"), Outline = Outline.None }, "J3:J5");
+
+            // An SVG icon. Excel 2016 and later draw the SVG; older versions a transparent pixel.
+            Result<Picture> icon = Picture.FromSvg("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" fill="#8BFFF7"/></svg>"""u8);
+
+            if (icon.IsFailure(out string? invalid, out _, out Picture? svg) == true)
+            {
+                Console.WriteLine(invalid);   // not an SVG document
+
+                return;
+            }
+
+            // A navigation button: shapes and pictures that move, resize and link as one.
+            ShapeGroup button = new(
+            [
+                GroupItem.Of(new Shape(ShapeKind.RoundedRectangle) { Fill = Fill.Solid("#232D45"), Outline = Outline.None }, DrawingBounds.FromPoints(0, 0, 145, 40)),
+                GroupItem.Of(svg with { Description = "Data" }, DrawingBounds.FromPoints(12, 9, 22, 22)),
+                GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText("Data", new TextFont { Color = "#FFFFFF" }) { Horizontal = HorizontalAlignment.Left } }, DrawingBounds.FromPoints(42, 0, 100, 40)),
+            ])
+            {
+                Link = Hyperlink.ToCell("Data", "A1"),
+            };
+
+            sheet.AddGroup(button, DrawingBounds.FromPoints(20, 20, 145, 40));
+
+            // A gauge: a doughnut with a thick ring, a colour per slice, no border or background.
+            Chart gauge = new(ChartType.Doughnut)
+            {
+                Series = [new ChartSeries("Share", "Data!B1:B2", "Data!A1:A2") { PointColors = ["#00C5AE", "#2E3850"], Outline = Outline.None }],
+                HoleSize = 75,
+                Legend = LegendPosition.None,
+                Background = Fill.None,
+                Border = Outline.None,
+            };
+
+            Result added = sheet.AddChart(gauge, DrawingBounds.FromPoints(440, 20, 160, 160));
+
+            sheet.AddHyperlink("A1", Hyperlink.ToUrl("https://example.com/help"));   // a cell that links
+            await sheet.WriteRowAsync([Cell.Of("Help").Underline().FontColor("#0563C1")]);
+        }
+        #endregion
+
+        Assert.Empty(TestFiles.Validate(new MemoryStream(await File.ReadAllBytesAsync("dashboard.xlsx"))));
+    }
+
+    [Fact]
+    public async Task Charts_styled()
+    {
+        await CreateBudgetAsync("budget.xlsx");
+
+        #region example: charts-styled
+        Result<Workbook> opened = await Workbook.OpenAsync("budget.xlsx");
+
+        if (opened.IsFailure(out string? error, out _, out Workbook? book) == true || book.Sheet("Budget").IsSuccess(out Worksheet? sheet) == false)
+        {
+            return;
+        }
+
+        // Pick out one month: a colour per point, null for the others.
+        string?[] highlight = new string?[12];
+        highlight[7] = "#00C5AE";
+
+        Chart chart = new(ChartType.Column)
+        {
+            Title = "Amount and target",
+            TitleFont = new TextFont { Size = 12, Bold = true },
+            Series =
+            [
+                new ChartSeries("Amount", "B2:B13", "A2:A13", "#3A4A6B")
+                {
+                    PointColors = highlight,
+                    DataLabels = new DataLabels { Position = DataLabelPosition.InsideEnd, NumberFormat = "# ##0", Font = new TextFont { Size = 8, Color = "#FFFFFF" } },
+                },
+
+                // A combination chart: this series is a smooth dashed line, on a second axis.
+                new ChartSeries("Target", "C2:C13", "A2:A13")
+                {
+                    Type = ChartType.Line,
+                    Smooth = true,
+                    Marker = MarkerStyle.Circle,
+                    MarkerSize = 6,
+                    Outline = new Outline("#E1541C", 2.25) { Dash = LineDash.Dash },
+                    SecondaryAxis = true,
+                },
+            ],
+            GapWidth = 60,                                    // narrower gaps between the columns
+            Background = Fill.Gradient("#FFFFFF", "#EEF3FA"),
+            Border = Outline.None,                            // no frame
+            Font = new TextFont { Name = "Segoe UI", Size = 9, Color = "#595959" },
+            ValueAxis = new ChartAxis { Minimum = 0, MajorUnit = 2000, NumberFormat = "# ##0", Line = Outline.None, GridlineOutline = new Outline("#D9D9D9", 0.5) },
+            SecondaryValueAxis = new ChartAxis { Visible = false, Minimum = 0, Maximum = 14000 },
+            Legend = LegendPosition.Top,
+        };
+
+        Result added = sheet.AddChart(chart, "F2:N20");
+        await book.SaveAsync("budget-styled.xlsx");
+        #endregion
+
+        Assert.True(added.IsSuccess(out _, out _));
+        Assert.Empty(TestFiles.Validate(new MemoryStream(await File.ReadAllBytesAsync("budget-styled.xlsx"))));
+    }
+
+    [Fact]
+    public async Task Sheet_view()
+    {
+        await CreateBudgetAsync("budget.xlsx");
+
+        #region example: sheet-view
+        Result<Workbook> opened = await Workbook.OpenAsync("budget.xlsx");
+
+        if (opened.IsFailure(out string? error, out _, out Workbook? book) == true || book.Sheet("Budget").IsSuccess(out Worksheet? sheet) == false)
+        {
+            return;
+        }
+
+        Console.WriteLine(sheet.View.Zoom);   // as the file has it: 100
+        sheet.View = sheet.View with { ShowGridLines = false, Zoom = 120, TabColor = "#00B050", ActiveCell = new CellAddress(1, 1) };
+
+        // A cell that links to another sheet, and one that links to the web. The cells keep their values.
+        sheet["F1"] = Cell.Of("Go to the summary").Underline().FontColor("#0563C1");
+        Result linked = sheet.AddHyperlink("F1", Hyperlink.ToCell("Summary", "A1"));
+        sheet.AddHyperlink(new CellAddress(1, 5), Hyperlink.ToUrl("https://example.com/budget") with { Tooltip = "The budget online" });
+
+        await book.SaveAsync("budget-view.xlsx");
+        #endregion
+
+        Assert.True(linked.IsSuccess(out _, out _));
+        Assert.True((await Workbook.OpenAsync("budget-view.xlsx")).IsSuccess(out Workbook? saved));
+        Assert.Equal(120, saved!.Sheets[0].View.Zoom);
+        Assert.Empty(TestFiles.Validate(new MemoryStream(await File.ReadAllBytesAsync("budget-view.xlsx"))));
+    }
+
+    [Fact]
     public async Task Conditional_formatting()
     {
         await CreateBudgetAsync("budget.xlsx");

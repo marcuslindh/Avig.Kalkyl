@@ -46,13 +46,33 @@ internal readonly record struct SheetReference(string? Sheet, CellRange Range)
     }
 }
 
-/// <summary>Where a drawing sits: across a block of cells, or at a cell with a size in EMU.</summary>
-internal readonly record struct DrawingAnchor(CellAddress From, CellRange? Area, long Width, long Height);
+/// <summary>
+/// Where a drawing sits: across a block of cells, at a cell with a size in EMU, or, when
+/// <see cref="Absolute"/> is set, at a place on the sheet regardless of the cells.
+/// </summary>
+internal readonly record struct DrawingAnchor(CellAddress From, CellRange? Area, long Width, long Height)
+{
+    public DrawingBounds? Absolute { get; init; }
 
-/// <summary>A chart or a picture on a sheet, with the series references already resolved to formulas.</summary>
+    public static DrawingAnchor At(DrawingBounds bounds)
+    {
+        return new DrawingAnchor(default, null, bounds.Width, bounds.Height) { Absolute = bounds };
+    }
+
+    public static DrawingAnchor Over(CellRange area)
+    {
+        return new DrawingAnchor(area.First, area, 0, 0);
+    }
+}
+
+/// <summary>A chart, a picture, a shape or a group on a sheet, with a chart's series references already resolved to formulas.</summary>
 internal sealed record DrawingItem(Chart? Chart, IReadOnlyList<ResolvedSeries> Series, Picture? Picture, DrawingAnchor Anchor)
 {
-    /// <summary>The name of the slicer the anchor holds, when it holds one rather than a chart or a picture.</summary>
+    public Shape? Shape { get; init; }
+
+    public ShapeGroup? Group { get; init; }
+
+    /// <summary>The name of the slicer the anchor holds, when it holds one rather than a chart, a picture, a shape or a group.</summary>
     public string? Slicer { get; init; }
 }
 
@@ -69,12 +89,50 @@ internal sealed class SheetExtras
 
     private readonly List<(CellRange Range, ConditionalFormat Format)> conditionalFormats = [];
     private readonly List<DrawingItem> drawings = [];
+    private readonly List<(CellAddress Cell, Hyperlink Link)> hyperlinks = [];
 
     public IReadOnlyList<(CellRange Range, ConditionalFormat Format)> ConditionalFormats => conditionalFormats;
 
     public IReadOnlyList<DrawingItem> Drawings => drawings;
 
     public bool HasCharts => drawings.Exists(item => item.Chart is not null);
+
+    /// <summary>The links added to cells, at most one per cell: a later one replaces an earlier.</summary>
+    public IReadOnlyList<(CellAddress Cell, Hyperlink Link)> Hyperlinks => hyperlinks;
+
+    /// <summary>The links that go to a web address and so need a relationship from the sheet.</summary>
+    public IEnumerable<Hyperlink> ExternalHyperlinks => hyperlinks.Where(pair => pair.Link.IsExternal == true).Select(pair => pair.Link);
+
+    public void AddHyperlink(CellAddress cell, Hyperlink link)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+        hyperlinks.RemoveAll(pair => pair.Cell == cell);
+
+        if (hyperlinks.Count >= 65_530)
+        {
+            throw new InvalidOperationException("A sheet holds at most 65 530 hyperlinks.");
+        }
+
+        hyperlinks.Add((cell, link));
+    }
+
+    public void AddShape(Shape shape, DrawingAnchor anchor)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        drawings.Add(new DrawingItem(null, [], null, anchor) { Shape = shape });
+    }
+
+    public void AddGroup(ShapeGroup group, DrawingAnchor anchor)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        drawings.Add(new DrawingItem(null, [], null, anchor) { Group = group });
+    }
+
+    public void AddPicture(Picture picture, DrawingBounds bounds)
+    {
+        ArgumentNullException.ThrowIfNull(picture);
+        drawings.Add(new DrawingItem(null, [], picture, DrawingAnchor.At(bounds)));
+    }
 
     public void AddConditionalFormat(CellRange range, ConditionalFormat format)
     {
@@ -85,12 +143,20 @@ internal sealed class SheetExtras
     /// <summary>Adds a chart. NotFound when a series refers to a sheet that is not in <paramref name="sheetExists"/>.</summary>
     public Result AddChart(Chart chart, CellRange area, string ownSheet, Func<string, bool> sheetExists)
     {
+        return AddChart(chart, DrawingAnchor.Over(area), ownSheet, sheetExists);
+    }
+
+    /// <summary>As <see cref="AddChart(Chart, CellRange, string, Func{string, bool})"/>, at any anchor.</summary>
+    public Result AddChart(Chart chart, DrawingAnchor anchor, string ownSheet, Func<string, bool> sheetExists)
+    {
         ArgumentNullException.ThrowIfNull(chart);
 
         if (chart.Series.Count == 0)
         {
             throw new ArgumentException("The chart has no series. Set Chart.Series.", nameof(chart));
         }
+
+        chart.Validate();
 
         List<ResolvedSeries> resolved = [];
 
@@ -114,7 +180,7 @@ internal sealed class SheetExtras
             resolved.Add(new ResolvedSeries(series, series.Values.ToFormula(ownSheet), categories));
         }
 
-        drawings.Add(new DrawingItem(chart, resolved, null, new DrawingAnchor(area.First, area, 0, 0)));
+        drawings.Add(new DrawingItem(chart, resolved, null, anchor));
 
         return Result.Success();
     }
@@ -128,7 +194,7 @@ internal sealed class SheetExtras
     public void AddPicture(Picture picture, CellRange area)
     {
         ArgumentNullException.ThrowIfNull(picture);
-        drawings.Add(new DrawingItem(null, [], picture, new DrawingAnchor(area.First, area, 0, 0)));
+        drawings.Add(new DrawingItem(null, [], picture, DrawingAnchor.Over(area)));
     }
 
     public void AddPicture(Picture picture, CellAddress topLeft, double scale)

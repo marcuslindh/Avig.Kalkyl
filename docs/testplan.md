@@ -112,6 +112,23 @@ kom två skydd till, med paketlagret Avig.OpenXml 0.1.6.
 | Bladlistan | Sparningen skriver nu bladlistan med diagram-, makro- och dialogblad kvar på sina platser, så att `localSheetId` och `activeTab` fortsätter att stämma. Förut föll de bort ur `<sheets>`, och en fil från Excel med ett makroblad före kalkylbladet gick inte att öppna i Excel efter att ha sparats. |
 | FUN-04 (aktivt innehåll) | 2026-11-25 i Excel 365 via COM: en fil som Excel själv skapat med makroblad, dialogblad, OLE-objekt, extern länk, frågetabell och Power Query öppnades utan reparation både efter vanlig sparning och efter `RemoveActiveContent`, liksom en med en Power Query-tabell och en formulärknapp. ActiveX gick inte att lägga in via COM på maskinen, så ActiveX finns bara i de handskrivna testfilerna och i ExcelCheck-fil 13. Alla 85 ExcelCheck-filer, med den nya fil 13 (allt aktivt innehåll borttaget), och de 30 handledningsfiler som går att rensa öppnades utan reparation efter rensningen. De övriga 8 har en datamodell och vägras. En kontrollfil med ett trasigt index till de delade strängarna vägrades, vilket visar att kontrollen fungerar. |
 
+### Status 2026-11-25: former, grupper, SVG, diagramval, bladvy och hyperlänkar
+
+För att kunna bygga dashboards som Excels mallar (mörka kort med toningar och skuggor, en
+navigeringsspalt med länkade knappar och SVG-ikoner, ringdiagram som mätare, tratt av staplade
+staplar, kombinerade diagram) kom former (`Shape`, `ShapeGroup`), SVG-bilder, fler diagramval,
+`SheetView` och hyperlänkar i celler till, i båda skrivarna. Förebilden var en dashboardmall som
+Excel sparat (inte incheckad, den är tredje parts).
+
+| Testfall | Åtgärd |
+|---|---|
+| Schemat | `DashboardTests.cs` kontrollerar XML:en mot det Excel skriver och mot Microsofts schema för varje formtyp, fyllning, kontur, skugga, text, länk, grupp, SVG och diagramval, i båda skrivarna. `A_file_with_every_feature_passes_Microsofts_schema_validation` täcker alla nya funktioner i den strömmande skrivaren. |
+| Rundtur | Dashboarden (`DashboardWorkbook.cs`, från båda skrivarna) öppnas och sparas igen av dokumentmodellen: alla delar finns kvar och ritningar, diagram och media är byte för byte. Former och diagram som läggs till en öppnad ritning får nya id:n och relationer efter filens egna. Vy, flikfärg och länkar i en öppnad fil skrivs om utan att det modellen inte känner till försvinner (`sheetPr`-attribut, en temafärg på fliken, `view="pageLayout"`, filens egna länkar). |
+| Mallen | `DashboardTemplateTests` i kompatibilitetsprojektet öppnar mallen om `KALKYL_DASHBOARD_TEMPLATE` pekar på den (annars hoppas testet över), sparar den oförändrad och med tillägg, och kräver att alla 483 delar finns kvar (utom `calcChain.xml`, som släpps med avsikt) och att ritningar, diagram, media, pivottabeller och utsnitt är byte för byte. Körd 2026-11-25: godkänd. |
+| Fientlig indata | `Picture.FromSvg` läser bara rotelementet med en egen `XmlReader` som hoppar över DTD:n: en entitetsbomb ger `Invalid`, och en extern DTD hämtas aldrig. Text som XML inte kan hålla (styrtecken, halva surrogatpar) i former, länktips, diagramtitlar och serienamn ger `ArgumentException` när den sätts, inte ett fel när filen sparas. |
+| FUZ (`roundtrip`) | Målet lägger nu också varje text i en textruta, som text och alternativ text, och läser tillbaka den ur ritningens XML som Excel läser den (en rad per stycke). |
+| FUN-04 (dashboard) | 2026-11-25 i Excel 365 via COM (`tools/Avig.Kalkyl.ExcelCheck/open-in-excel.ps1`): ExcelCheck-fil 14 och 15 (dashboarden från dokumentmodellen och den strömmande skrivaren) och fil 16 (varje formtyp, streckmönster, effekt och diagramval, alla tillåtna etikettpositioner, sekundär axel, höger till vänster) öppnades utan reparation, liksom mallen efter rundtur med och utan tillägg. Skriptet visade sig behöva en ändring: med `DisplayAlerts = $false` reparerar Excel inte tyst, utan `Workbooks.Open` kastar för en fil som behöver repareras (provat med ett trasigt stilindex, ett diagram utan axel-id och trasig XML). Dashboarden renderades också via `CopyPicture` och granskades: kort, toningar, skuggor, SVG-ikoner, länkar (via `Shape.Hyperlink`), markerad stapel, mjuk linje, mätare och tratt såg ut som avsett. |
+
 ### Status 2026-11-25: pivottabeller och utsnitt
 
 Dokumentmodellen skapar pivottabeller (`Worksheet.AddPivotTable`) och utsnitt

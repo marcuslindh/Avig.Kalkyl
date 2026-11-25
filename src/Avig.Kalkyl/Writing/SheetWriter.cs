@@ -19,6 +19,7 @@ public sealed class SheetWriter
     private readonly SortedDictionary<int, double> columnWidths = [];
     private int frozenRows;
     private int frozenColumns;
+    private SheetView view = SheetView.Default;
     private bool autoFilter;
     private bool started;
     private int lastColumn = -1;
@@ -174,6 +175,143 @@ public sealed class SheetWriter
         }
     }
 
+    /// <summary>
+    /// Sets how the sheet looks in Excel: gridlines, headers, zoom, tab colour, selected cell and
+    /// direction. Must come before the first row: the view goes at the top of the sheet in the file.
+    /// </summary>
+    /// <param name="view">The view, for example <c>new SheetView { ShowGridLines = false }</c>.</param>
+    public void SetView(SheetView view)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        ThrowIfStarted(nameof(SetView));
+        this.view = view;
+    }
+
+    /// <summary>The view set with <see cref="SetView(SheetView)"/>, or <see cref="SheetView.Default"/>.</summary>
+    public SheetView View => view;
+
+    /// <summary>Adds a chart at a place on the sheet, which stays put when rows and columns change size.</summary>
+    /// <param name="chart">The chart.</param>
+    /// <param name="bounds">The place, for example <c>DrawingBounds.FromPoints(20, 20, 360, 220)</c>.</param>
+    /// <returns>Success, or NotFound when a series refers to a sheet the workbook does not have yet.</returns>
+    public Result AddChart(Chart chart, DrawingBounds bounds)
+    {
+        ThrowIfFinished();
+
+        return extras.AddChart(chart, DrawingAnchor.At(bounds), Name, sheetExists);
+    }
+
+    /// <summary>Puts a picture at a place on the sheet, stretched to fill it.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="bounds">The place.</param>
+    public void AddPicture(Picture picture, DrawingBounds bounds)
+    {
+        ThrowIfFinished();
+        extras.AddPicture(picture, bounds);
+    }
+
+    /// <summary>Adds a shape over a block of cells; it stretches when they change size.</summary>
+    /// <param name="shape">The shape.</param>
+    /// <param name="area">The cells.</param>
+    public void AddShape(Shape shape, CellRange area)
+    {
+        ThrowIfFinished();
+        extras.AddShape(shape, DrawingAnchor.Over(area));
+    }
+
+    /// <summary>Adds a shape over a block of cells given in A1 notation, such as <c>B2:D6</c>.</summary>
+    /// <param name="shape">The shape.</param>
+    /// <param name="area">The cells.</param>
+    public void AddShape(Shape shape, string area)
+    {
+        AddShape(shape, ParseRange(area));
+    }
+
+    /// <summary>Adds a shape at a place on the sheet, which stays put when rows and columns change size.</summary>
+    /// <param name="shape">The shape.</param>
+    /// <param name="bounds">The place, for example <c>DrawingBounds.FromPoints(20, 20, 160, 90)</c>.</param>
+    public void AddShape(Shape shape, DrawingBounds bounds)
+    {
+        ThrowIfFinished();
+        extras.AddShape(shape, DrawingAnchor.At(bounds));
+    }
+
+    /// <summary>Adds a group of shapes and pictures over a block of cells, scaled to fill it.</summary>
+    /// <param name="group">The group.</param>
+    /// <param name="area">The cells.</param>
+    public void AddGroup(ShapeGroup group, CellRange area)
+    {
+        ThrowIfFinished();
+        extras.AddGroup(group, DrawingAnchor.Over(area));
+    }
+
+    /// <summary>Adds a group of shapes and pictures over a block of cells given in A1 notation.</summary>
+    /// <param name="group">The group.</param>
+    /// <param name="area">The cells.</param>
+    public void AddGroup(ShapeGroup group, string area)
+    {
+        AddGroup(group, ParseRange(area));
+    }
+
+    /// <summary>Adds a group of shapes and pictures at a place on the sheet, scaled to fill it.</summary>
+    /// <param name="group">The group.</param>
+    /// <param name="bounds">The place.</param>
+    public void AddGroup(ShapeGroup group, DrawingBounds bounds)
+    {
+        ThrowIfFinished();
+        extras.AddGroup(group, DrawingAnchor.At(bounds));
+    }
+
+    /// <summary>
+    /// Makes a cell a link to another cell in the workbook or to a web address. The cell keeps
+    /// whatever is written in it; give it a text and, if you like, a blue underlined style.
+    /// A second link on the same cell replaces the first.
+    /// </summary>
+    /// <param name="cell">The cell.</param>
+    /// <param name="link">Where a click goes.</param>
+    public void AddHyperlink(CellAddress cell, Hyperlink link)
+    {
+        ThrowIfFinished();
+        extras.AddHyperlink(cell, link);
+    }
+
+    /// <summary>Makes a cell given in A1 notation, such as <c>B2</c>, a link.</summary>
+    /// <param name="cell">The cell.</param>
+    /// <param name="link">Where a click goes.</param>
+    public void AddHyperlink(string cell, Hyperlink link)
+    {
+        AddHyperlink(ParseRange(cell).First, link);
+    }
+
+    /// <summary>
+    /// The relationships from the sheet: the drawing (rId1) when there is one, and a link per
+    /// hyperlink to a web address (rId2 on).
+    /// </summary>
+    internal List<PartRelationship> Relationships(string drawingTarget)
+    {
+        List<PartRelationship> relationships = [];
+
+        if (extras.Drawings.Count > 0)
+        {
+            relationships.Add(new PartRelationship(DrawingRelationshipId, DrawingXml.DrawingRelationship, drawingTarget));
+        }
+
+        int number = 2;
+
+        foreach (Hyperlink link in extras.ExternalHyperlinks)
+        {
+            relationships.Add(new PartRelationship("rId" + SheetXml.Text(number), DrawingXml.HyperlinkRelationship, link.Url!, true));
+            number++;
+        }
+
+        return relationships;
+    }
+
+    private List<string> ExternalLinkIds()
+    {
+        return Relationships(string.Empty).Where(relationship => relationship.Type == DrawingXml.HyperlinkRelationship).Select(relationship => relationship.Id).ToList();
+    }
+
     internal static CellRange ParseRange(string reference)
     {
         ArgumentNullException.ThrowIfNull(reference);
@@ -261,6 +399,11 @@ public sealed class SheetWriter
             await ConditionalFormatXml.WriteAsync(xml, extras.ConditionalFormats, styles, 1);
         }
 
+        if (extras.Hyperlinks.Count > 0)
+        {
+            await SheetXml.WriteHyperlinksAsync(xml, extras.Hyperlinks, ExternalLinkIds());
+        }
+
         if (extras.Drawings.Count > 0)
         {
             await DrawingXml.WriteSheetDrawingAsync(xml, DrawingRelationshipId);
@@ -285,7 +428,8 @@ public sealed class SheetWriter
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "worksheet", Ooxml.SpreadsheetNamespace);
         await xml.WriteAttributeStringAsync("xmlns", "r", null, Ooxml.RelationshipsNamespace);
-        await SheetXml.WriteSheetViewsAsync(xml, Index == 0, frozenRows, frozenColumns);
+        await SheetXml.WriteSheetPropertiesAsync(xml, view.TabColor);
+        await SheetXml.WriteSheetViewsAsync(xml, Index == 0, frozenRows, frozenColumns, view);
         List<ColumnRange> ranges = columnWidths.Select(pair => new ColumnRange(pair.Key, pair.Key, pair.Value, [])).ToList();
         await SheetXml.WriteColumnsAsync(xml, ranges);
         await xml.WriteStartElementAsync(null, "sheetData", null);

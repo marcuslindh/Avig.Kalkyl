@@ -781,6 +781,12 @@ internal static class TextFunctions
             delimiters.Add(delimiter.Text!);
         }
 
+        // A blank cell as the delimiter gives no items; it is the empty text, as Excel reads it.
+        if (delimiters.Count == 0)
+        {
+            delimiters.Add(string.Empty);
+        }
+
         if (call.TryInteger(2, 1, out long instance, out error) == false || call.TryInteger(3, 0, out long matchMode, out error) == false || call.TryInteger(4, 0, out long matchEnd, out error) == false)
         {
             return error;

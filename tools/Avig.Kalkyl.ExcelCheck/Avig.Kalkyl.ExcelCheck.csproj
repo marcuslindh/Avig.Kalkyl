@@ -15,6 +15,8 @@
   <ItemGroup>
     <!-- The workbook with active content that the tests build; file 13 is it, cleaned. -->
     <Compile Include="..\..\tests\Avig.Kalkyl.Tests\ActiveWorkbook.cs" Link="ActiveWorkbook.cs" />
+    <!-- The dashboard the tests build; files 14 and 15 are it. -->
+    <Compile Include="..\..\tests\Avig.Kalkyl.Tests\DashboardWorkbook.cs" Link="DashboardWorkbook.cs" />
   </ItemGroup>
 
   <ItemGroup>
