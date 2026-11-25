@@ -13,6 +13,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The workbook with active content that the tests build; file 13 is it, cleaned. -->
+    <Compile Include="..\..\tests\Avig.Kalkyl.Tests\ActiveWorkbook.cs" Link="ActiveWorkbook.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Avig" />
     <Using Include="Avig.Kalkyl" />
   </ItemGroup>

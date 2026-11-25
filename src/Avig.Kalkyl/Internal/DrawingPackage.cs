@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using System.Xml;
+using System.Xml.Linq;
+using Avig.Kalkyl.Document;
 using Avig.Kalkyl.Reading;
 
 namespace Avig.Kalkyl.Internal;
@@ -19,6 +21,9 @@ internal sealed class DrawingPackage
         this.archive = archive;
         paths = new HashSet<string>(existingPaths, StringComparer.OrdinalIgnoreCase);
     }
+
+    /// <summary>What a save after <see cref="Workbook.RemoveActiveContent"/> leaves out, which also applies to the drawings added to.</summary>
+    public ActiveContentRemoval Removal { get; init; } = ActiveContentRemoval.None;
 
     /// <summary>Overrides for [Content_Types].xml: part name (with a leading /) and content type.</summary>
     public List<(string PartName, string ContentType)> Overrides { get; } = [];
@@ -76,8 +81,24 @@ internal sealed class DrawingPackage
             {
                 await reader.ReadAsync();
 
+                IReadOnlySet<string> removedIds = Removal.RemovedIds(drawingPath);
+                IReadOnlySet<string> removedShapes = Removal.RemovedShapesOf(drawingPath);
+
                 while (reader.EOF == false && XmlParts.IsEnd(reader, 0) == false)
                 {
+                    // When active content is removed, the anchors are cleaned as the copy would have cleaned them.
+                    if (Removal.IsActive == true && reader.NodeType == XmlNodeType.Element)
+                    {
+                        XElement anchor = (XElement)await XNode.ReadFromAsync(reader, cancellationToken);
+
+                        if (ActiveContentRemoval.Clean(anchor, removedIds, removedShapes) == true)
+                        {
+                            await anchor.WriteToAsync(xml, cancellationToken);
+                        }
+
+                        continue;
+                    }
+
                     await xml.WriteNodeAsync(reader, true);
                 }
             }
@@ -91,7 +112,7 @@ internal sealed class DrawingPackage
         {
             await xml.WriteStartDocumentAsync(true);
             await xml.WriteStartElementAsync(null, "Relationships", Ooxml.PackageRelationshipsNamespace);
-            await CopyRelationshipsAsync(original, relsPath, xml, cancellationToken);
+            await CopyRelationshipsAsync(original, relsPath, xml, Removal.RemovedIds(drawingPath), cancellationToken);
             await DrawingXml.WriteRelationshipElementsAsync(xml, relationships);
             await xml.WriteEndElementAsync();
             await xml.WriteEndDocumentAsync();
@@ -102,28 +123,15 @@ internal sealed class DrawingPackage
         return [drawingPath, relsPath];
     }
 
-    /// <summary>The Relationship elements of an opened .rels part, copied as they are.</summary>
-    public static async Task CopyRelationshipsAsync(ZipArchive original, string relsPath, XmlWriter xml, CancellationToken cancellationToken)
+    /// <summary>The Relationship elements of an opened .rels part, copied as they are, except those whose Id is in <paramref name="removedIds"/>.</summary>
+    public static async Task CopyRelationshipsAsync(ZipArchive original, string relsPath, XmlWriter xml, IReadOnlySet<string> removedIds, CancellationToken cancellationToken)
     {
         if (XmlParts.TryFindEntry(original, relsPath, out ZipArchiveEntry? entry) == false)
         {
             return;
         }
 
-        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
-        using XmlReader reader = XmlParts.CreateReader(stream);
-
-        while (reader.EOF == false)
-        {
-            if (XmlParts.IsElement(reader, "Relationship") == true)
-            {
-                await xml.WriteNodeAsync(reader, true);
-
-                continue;
-            }
-
-            await reader.ReadAsync();
-        }
+        await ActiveContentRemoval.CopyRelationshipsAsync(entry, xml, removedIds, cancellationToken);
     }
 
     /// <summary>Every Id in a .rels part, external relationships included, so that none is reused.</summary>

@@ -100,6 +100,18 @@ Alla brister i tabellen ovan är åtgärdade och har regressionstester i
 | FUZ-03 (Z-06) | Fuzzmålet `attribute-sweep` ger varje heltalsattribut i mallen vart och ett av 18 gränsvärden. |
 | 6.3 | `tools/Avig.Kalkyl.Fuzz/corpus-check.ps1` kör varje indata i en egen process med tidsgräns och 1 GiB heap. Det är verifierat att den fångar stackspill. |
 
+### Status 2026-11-25: aktivt innehåll och strikt zip
+
+Efter säkerhetsanalysen i Knowledge ("World — Referens: Skadlig kod i Word- och Excel-filer")
+kom två skydd till, med paketlagret Avig.OpenXml 0.1.6.
+
+| Testfall | Åtgärd |
+|---|---|
+| S-10 (lokalt huvud mot central katalog, överlapp) | `KalkylLimits.StrictZip`, på som standard och i `Unlimited`: `XlsxReader` kör `OpcZip.CheckStructureAsync` innan `ZipArchive` skapas, så alla vägar in (läsaren från fil, ström och ström som inte kan söka, dokumentmodellen och den typade läsningen) avvisar en zip vars lokala huvuden och centrala katalog inte säger samma sak, med poster som överlappar eller med byte före, mellan eller efter posterna. Felkoden är `Damaged`. Tester i `StrictZipTests.cs` för varje väg in: en post som bara finns i de lokala huvudena och byte efter slutposten. Alla 38 handledningsfiler klarar kontrollen (`Every_file_passes_the_strict_zip_check_and_survives_RemoveActiveContent`). `zip-raw` fuzzar både med och utan kontrollen, så att kontrollerna bakom den också nås. |
+| S-16, S-17 (aktivt innehåll) | `Workbook.ActiveContent` och `XlsxReader.GetActiveContentAsync` ger `[Flags] ActiveContent`: `Macros` (VBA, XLM-makroblad, dialogblad), `ActiveX`, `EmbeddedObjects`, `ExternalReferences` (externa länkar till arbetsböcker, DDE-länkar och andra externa relationer utom hyperlänkar) och `DataConnections` (connections.xml, frågetabeller, Power Query). `Workbook.ExternalReferences` listar länkarna. `RemoveActiveContent()` tar bort allt detta vid nästa sparning, och formler mot andra arbetsböcker ersätts med sitt senaste värde. En del som inget längre pekar på följer med ut. Det som inte går att ta bort utan att arbetsboken går sönder ger `Invalid`: en pivottabell eller datamodell (Power Pivot) som hämtar från en anslutning, och ett diagram som ritas från en annan arbetsbok. Tester i `ActiveContentTests.cs`, en per sorts innehåll för upptäckt och för borttagning, byggda av XML som Excel 365 skrev. |
+| Bladlistan | Sparningen skriver nu bladlistan med diagram-, makro- och dialogblad kvar på sina platser, så att `localSheetId` och `activeTab` fortsätter att stämma. Förut föll de bort ur `<sheets>`, och en fil från Excel med ett makroblad före kalkylbladet gick inte att öppna i Excel efter att ha sparats. |
+| FUN-04 (aktivt innehåll) | 2026-11-25 i Excel 365 via COM: en fil som Excel själv skapat med makroblad, dialogblad, OLE-objekt, extern länk, frågetabell och Power Query öppnades utan reparation både efter vanlig sparning och efter `RemoveActiveContent`, liksom en med en Power Query-tabell och en formulärknapp. ActiveX gick inte att lägga in via COM på maskinen, så ActiveX finns bara i de handskrivna testfilerna och i ExcelCheck-fil 13. Alla 85 ExcelCheck-filer, med den nya fil 13 (allt aktivt innehåll borttaget), och de 30 handledningsfiler som går att rensa öppnades utan reparation efter rensningen. De övriga 8 har en datamodell och vägras. En kontrollfil med ett trasigt index till de delade strängarna vägrades, vilket visar att kontrollen fungerar. |
+
 Det som återstår kräver en miljö eller ett beslut:
 
 - **FUN-04:** öppna filerna i riktiga Excel. `tools/Avig.Kalkyl.ExcelCheck` skapar filerna, och de är kontrollerade mot schemat. Fil 10–12 (diagram, bilder och villkorsstyrd formatering, också tillagda i de 38 handledningsfilerna) gav inga nya schemafel 2026-11-24, och filernas egna diagram, bilder och regler fanns kvar. Samma dag öppnades alla 84 filer automatiskt i Excel 365 (16.0, build 20625) via COM. Ingen fil behövde repareras eller vägrades. En kontrollfil med en trasig rad vägrades, vilket visar att kontrollen fungerar. Efter full omräkning (Ctrl+Alt+F9) hade inga värden ändrats, utom de som beror på `RANDBETWEEN` i `class-correlation`. Det som kräver ögon i `docs/excel-checklista.md` återstår: diagrammens och formateringens utseende, makrona i fil 07 och 08 och jämförelsen med originalen.
@@ -442,15 +454,15 @@ den testas kontrollerat, vad man ska observera och vilka skydd som ska finnas.
 **S-16 Makron i XLSM [A]**
 - **Läget:** makron körs aldrig, och `vbaProject.bin` följer med oförändrad när filen sparas (P01).
 - **Risk:** en app som "tvättar" filer genom att öppna och spara dem tror felaktigt att makron är borta.
-- **Skydd som rekommenderas:**
-  - En egenskap `Workbook.HasMacros`.
-  - Ett val för att ta bort `vbaProject.bin`, ActiveX och `xl/embeddings/*` när filen sparas och byta innehållstyp till xlsx.
-  - Alternativt dokumentation om att paketet inte tvättar filer.
+- **Skydd:** finns. `Workbook.HasMacros` och `RemoveMacros()` för VBA-projektet (2026-11-24).
+  `Workbook.ActiveContent` och `RemoveActiveContent()` för allt aktivt innehåll: VBA,
+  XLM-makroblad och dialogblad med namn som Auto_Open, ActiveX, OLE-objekt, externa länkar,
+  DDE och dataanslutningar (2026-11-25, se statusen ovan).
 
 **S-17 Hyperlänkar, externa data och dolt innehåll [A]**
-- **Läget:** hyperlänkar, `connections.xml`, Power Query (`customXml`), OLE-objekt och dolda blad läses inte och tolkas inte. De följer med orörda när filen sparas.
-- **Test:** kontrollera att ingen av dem påverkar värden och att inget läses därifrån.
-- **Skydd:** dokumentera att "bevaras när filen sparas" också gäller farligt innehåll.
+- **Läget:** hyperlänkar, `connections.xml`, Power Query (`customXml`), OLE-objekt och dolda blad läses inte och tolkas inte. De följer med orörda när filen sparas, utom efter `RemoveActiveContent()`, som tar bort allt utom hyperlänkarna och de dolda bladen. `Workbook.ExternalReferences` listar de externa relationerna och DDE-länkarna.
+- **Test:** kontrollera att ingen av dem påverkar värden och att inget läses därifrån. `ActiveContentTests` för upptäckt och borttagning.
+- **Skydd:** dokumenterat i README:n (Files from outside, 19. Active content).
 
 ### 2.4 Övriga risker
 
@@ -751,7 +763,7 @@ efter risk.
 | 7 | Aggregat över hela kolumner bygger en matris (P15) | Medel | Medel: fel svar (`#NUM!`) och tidigare OOM | Medel | F-11 | Aggregatfunktioner som bara går igenom celler som finns | Åtgärdad 2026-11-24: glesa vägar i `NonBlankValues` och `TryMatch` |
 | 8 | Dubbla postnamn ger tolkningsskillnad (P02) | Låg | Hög där ett filter används | Medel | S-12 | `Invalid` vid dubbletter | Åtgärdad 2026-11-24: `Invalid` |
 | 9 | Postnamn för zip slip följer med när filen sparas (P03) | Låg | Hög hos den som packar upp längre fram | Medel | S-11 | Avvisa eller ta bort sådana namn | Åtgärdad 2026-11-24: `Invalid` |
-| 10 | Makron följer med när filen "tvättas" (P01) | Medel | Medel | Medel | S-16 | `HasMacros` och ett val för att ta bort dem, eller dokumentation | Åtgärdad 2026-11-24: `HasMacros` och `RemoveMacros` |
+| 10 | Makron följer med när filen "tvättas" (P01) | Medel | Medel | Medel | S-16 | `HasMacros` och ett val för att ta bort dem, eller dokumentation | Åtgärdad 2026-11-24: `HasMacros` och `RemoveMacros`; 2026-11-25 också XLM, ActiveX, OLE, länkar och anslutningar med `ActiveContent` och `RemoveActiveContent` |
 | 11 | Felmeddelanden läcker sökvägar och innehåll (S-22) | Medel | Låg till medel | Medel | S-22 | Dokumentation och felkoder | Åtgärdad 2026-11-24: `KalkylErrorKind`, och meddelandena är dokumenterade som loggtext |
 | 12 | Formelinjektion vid export (S-14) | Medel | Medel hos den som öppnar filen | Medel | S-14 | Finns: text blir aldrig formel. Dokumentera `FromFormula`. | Åtgärdad: test och varning i `Cell.FromFormula` |
 | 13 | Okända undantag från zip-lagret (S-10, `NotSupportedException`) | Låg | Medel | Låg till medel | Z-03 | Fånga och returnera `Invalid` | Åtgärdad 2026-11-24: `CheckEntriesAsync` öppnar varje post |
@@ -761,6 +773,8 @@ efter risk.
 | 17 | Path traversal och filåtkomst från paketet | Låg | Hög | Låg | S-21 | Ingen filåtkomst utöver anroparens sökväg | Verifierad i koden och med P03, P04 |
 | 18 | Sårbart beroende | Låg | Hög | Låg | avsnitt 5 | NuGet Audit och lockfil | Åtgärdad 2026-11-24: NuGet Audit på nivån low och låsfiler |
 | 19 | Deserialisering | Mycket låg | Hög | Mycket låg | S-24 | Grep-test i CI | Inte tillämpligt |
+| 20 | En zip som säger två saker visar en skanner en arbetsbok och Excel en annan | Medel | Hög hos den som litar på skannern | Medel | S-10 | Strikt kontroll av zip-strukturen | Åtgärdad 2026-11-25: `KalkylLimits.StrictZip`, på som standard |
+| 21 | Externa länkar, DDE, OLE och dataanslutningar följer med när filen "tvättas" | Medel | Hög hos den som öppnar filen i Excel | Medel | S-17 | Rapportera och ta bort | Åtgärdad 2026-11-25: `ActiveContent`, `ExternalReferences` och `RemoveActiveContent` |
 
 ---
 

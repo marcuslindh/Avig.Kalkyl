@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using Avig.OpenXml;
 
 namespace Avig.Kalkyl.Tests.Readme;
 
@@ -758,6 +759,49 @@ public sealed class ReadmeExamples : IDisposable
         #endregion
 
         Assert.True(File.Exists("clean.xlsx"));
+    }
+
+    [Fact]
+    public async Task ActiveContentAndLinks()
+    {
+        await using (MemoryStream upload = new ActiveWorkbook().AddMacroSheet().AddExternalWorkbookLink().AddDdeLink().Build())
+        {
+            await File.WriteAllBytesAsync("upload.xlsx", upload.ToArray());
+        }
+
+        #region example: active-content
+        // A zip file that says two things (KalkylLimits.StrictZip) is refused as damaged.
+        if ((await Workbook.OpenAsync("upload.xlsx")).IsSuccess(out Workbook? book) == false)
+        {
+            return;
+        }
+
+        if (book.ActiveContent != ActiveContent.None)
+        {
+            Console.WriteLine(book.ActiveContent);   // Macros, ExternalReferences
+
+            foreach (OpcExternalRelationship link in book.ExternalReferences)
+            {
+                Console.WriteLine($"{link.Kind}: {link.Target}");   // externalLinkPath: file:///\fileserver\share\other.xlsx, ddeLink: cmd|/c calc
+            }
+
+            Result removed = book.RemoveActiveContent();   // Invalid for a pivot table or data model fed by a connection
+
+            if (removed.IsFailure(out string? error, out _) == true)
+            {
+                Console.WriteLine(error);
+
+                return;
+            }
+        }
+
+        await book.SaveAsync("clean.xlsx");   // no macro sheet, no links; the linked cells keep their last values
+        #endregion
+
+        Assert.Equal(ActiveContent.None, book.ActiveContent);
+        Assert.True((await Workbook.OpenAsync("clean.xlsx")).IsSuccess(out Workbook? clean));
+        Assert.Equal(ActiveContent.None, clean.ActiveContent);
+        Assert.Equal((CellValue)84, clean.Sheets[0]["B1"].Value);
     }
 
     [Fact]

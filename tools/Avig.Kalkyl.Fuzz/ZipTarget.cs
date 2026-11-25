@@ -13,6 +13,8 @@ internal static class ZipTarget
 {
     private static readonly byte[] Template = PackageTarget.Template();
 
+    private static readonly KalkylLimits Lax = KalkylLimits.Default with { StrictZip = false };
+
     /// <summary>The fields worth hitting, as offsets from a local (PK\x03\x04) or central (PK\x01\x02) header.</summary>
     private static readonly int[] LocalFields = [4, 6, 8, 14, 18, 22, 26, 28];
 
@@ -111,9 +113,13 @@ internal static class ZipTarget
 
     private static async Task RunAsync(byte[] input)
     {
+        // With the strict zip check (the default) most of these are refused at once, so the
+        // checks behind it are fuzzed with it turned off.
         await using MemoryStream file = new(input);
         await PackageTarget.ReadEverythingAsync(file);
         file.Position = 0;
-        await PackageTarget.EditAndSaveAsync(file);
+        await PackageTarget.ReadEverythingAsync(file, Lax);
+        file.Position = 0;
+        await PackageTarget.EditAndSaveAsync(file, Lax);
     }
 }

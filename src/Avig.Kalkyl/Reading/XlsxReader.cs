@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Xml;
 using Avig.Kalkyl.Internal;
 using Avig.Kalkyl.Reading;
+using Avig.OpenXml;
 
 namespace Avig.Kalkyl;
 
@@ -44,9 +45,11 @@ public sealed class XlsxReader : IAsyncDisposable
     private readonly List<SheetPart> sheets;
     private readonly IReadOnlyList<string> sharedStrings;
     private readonly StyleTable styles;
+    private PackageScan? scan;
 
-    private XlsxReader(Stream stream, bool leaveOpen, ZipArchive archive, List<SheetPart> sheets, IReadOnlyList<string> sharedStrings, StyleTable styles, bool uses1904Dates, string workbookPath)
+    private XlsxReader(Stream stream, bool leaveOpen, ZipArchive archive, List<SheetPart> sheets, IReadOnlyList<DeclaredSheet> declaredSheets, IReadOnlyList<string> sharedStrings, StyleTable styles, bool uses1904Dates, string workbookPath)
     {
+        DeclaredSheets = declaredSheets;
         this.stream = stream;
         this.leaveOpen = leaveOpen;
         this.archive = archive;
@@ -74,6 +77,57 @@ public sealed class XlsxReader : IAsyncDisposable
 
     internal IReadOnlyList<SheetPart> SheetParts => sheets;
 
+    /// <summary>Every sheet in the workbook's sheet list, in tab order: worksheets, chart sheets, macro sheets and dialog sheets.</summary>
+    internal IReadOnlyList<DeclaredSheet> DeclaredSheets { get; }
+
+    /// <summary>
+    /// What in the file can act on its own or fetch something when Excel opens it, as
+    /// <see cref="Workbook.ActiveContent"/> has it. The relationships, the content types, the
+    /// external link parts and the custom XML parts are read; the sheets are not.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>The kinds of active content found; <see cref="ActiveContent.None"/> for a plain workbook.</returns>
+    /// <exception cref="InvalidDataException">A part that has to be read is damaged.</exception>
+    public async Task<ActiveContent> GetActiveContentAsync(CancellationToken cancellationToken = default)
+    {
+        PackageScan found = await GetScanAsync(cancellationToken);
+
+        return found.Found;
+    }
+
+    /// <summary>
+    /// The relationships to something outside the file that Excel follows on its own, and the DDE
+    /// links, as <see cref="Workbook.ExternalReferences"/> has them.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <returns>Every external relationship but hyperlinks, with the part it belongs to.</returns>
+    /// <exception cref="InvalidDataException">A part that has to be read is damaged.</exception>
+    public async Task<IReadOnlyList<OpcExternalRelationship>> GetExternalReferencesAsync(CancellationToken cancellationToken = default)
+    {
+        PackageScan found = await GetScanAsync(cancellationToken);
+
+        return found.ExternalReferences;
+    }
+
+    /// <summary>The scan of the package, made once.</summary>
+    internal async Task<PackageScan> GetScanAsync(CancellationToken cancellationToken)
+    {
+        if (scan is not null)
+        {
+            return scan;
+        }
+
+        try
+        {
+            scan = await PackageScan.ReadAsync(archive, cancellationToken);
+        }
+        catch (XmlException exception)
+        {
+            throw new InvalidDataException($"{KalkylError.DamagedPrefix}: a part that says what the workbook holds or links to has broken XML ({exception.Message}).", exception);
+        }
+
+        return scan;
+    }
 
     /// <summary>Opens a file.</summary>
     /// <param name="path">The file.</param>
@@ -270,6 +324,18 @@ public sealed class XlsxReader : IAsyncDisposable
             return Result<XlsxReader>.Failure(signatureError, signatureStatus);
         }
 
+        // A zip file whose local headers and directory disagree, or with bytes outside its
+        // entries, can show a scanner one workbook and Excel another; Excel never writes one.
+        if (limits.StrictZip == true)
+        {
+            Result structure = await OpcZip.CheckStructureAsync(source, int.MaxValue, cancellationToken);
+
+            if (structure.IsFailure(out string? structureError, out ResultStatus structureStatus) == true)
+            {
+                return Result<XlsxReader>.Failure(structureError, structureStatus);
+            }
+        }
+
         ZipArchive archive;
 
         try
@@ -365,16 +431,23 @@ public sealed class XlsxReader : IAsyncDisposable
         Dictionary<string, (string Type, string Target)> workbookRelationships = await XmlParts.ReadRelationshipsAsync(archive, Ooxml.RelationshipsPath(workbookPath), cancellationToken);
         (List<(string Name, string RelationshipId, int SheetId, SheetVisibility Visibility)> declared, bool uses1904) = await ReadWorkbookAsync(workbookEntry, cancellationToken);
         List<SheetPart> sheets = [];
+        List<DeclaredSheet> declaredSheets = [];
 
         foreach ((string name, string relationshipId, int sheetId, SheetVisibility visibility) in declared)
         {
             if (workbookRelationships.TryGetValue(relationshipId, out (string Type, string Target) relationship) == false)
             {
+                declaredSheets.Add(new DeclaredSheet(name, relationshipId, sheetId, visibility, string.Empty, -1));
+
                 continue;
             }
 
+            string kind = relationship.Type[(relationship.Type.LastIndexOf('/') + 1)..];
+
             if (Ooxml.IsRelationship(relationship.Type, "worksheet") == false)
             {
+                declaredSheets.Add(new DeclaredSheet(name, relationshipId, sheetId, visibility, kind, -1));
+
                 continue;
             }
 
@@ -388,6 +461,7 @@ public sealed class XlsxReader : IAsyncDisposable
                 return Result<XlsxReader>.Invalid($"The file is damaged: the sheets '{sharing.Info.Name}' and '{name}' point to the same part, '{path}'.");
             }
 
+            declaredSheets.Add(new DeclaredSheet(name, relationshipId, sheetId, visibility, kind, sheets.Count));
             sheets.Add(new SheetPart(new SheetInfo(name, sheets.Count, visibility), path, relationshipId, sheetId));
         }
 
@@ -408,7 +482,7 @@ public sealed class XlsxReader : IAsyncDisposable
             }
         }
 
-        return new XlsxReader(source, leaveOpen, archive, sheets, sharedStrings, styles, uses1904, workbookPath);
+        return new XlsxReader(source, leaveOpen, archive, sheets, declaredSheets, sharedStrings, styles, uses1904, workbookPath);
     }
 
     private static async Task<(List<(string Name, string RelationshipId, int SheetId, SheetVisibility Visibility)> Sheets, bool Uses1904)> ReadWorkbookAsync(ZipArchiveEntry entry, CancellationToken cancellationToken)
@@ -489,3 +563,10 @@ public sealed class XlsxReader : IAsyncDisposable
 
 /// <summary>A worksheet's entry in the workbook: its info, part path, relationship id and sheet id.</summary>
 internal sealed record SheetPart(SheetInfo Info, string Path, string RelationshipId, int SheetId);
+
+/// <summary>
+/// A sheet in the workbook's sheet list: its name, relationship id, sheet id and visibility, the
+/// kind of its relationship (worksheet, chartsheet, xlMacrosheet, dialogsheet; empty when the
+/// relationship is missing), and its position among the worksheets the package reads, or -1.
+/// </summary>
+internal sealed record DeclaredSheet(string Name, string RelationshipId, int SheetId, SheetVisibility Visibility, string Kind, int WorksheetIndex);

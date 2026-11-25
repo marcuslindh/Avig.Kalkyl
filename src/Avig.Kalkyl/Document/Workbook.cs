@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.IO.Compression;
 using Avig.Kalkyl.Document;
+using Avig.Kalkyl.Internal;
 using Avig.Kalkyl.Reading;
+using Avig.OpenXml;
 
 namespace Avig.Kalkyl;
 
@@ -24,7 +26,7 @@ namespace Avig.Kalkyl;
 /// </example>
 /// <remarks>
 /// Not safe to change from several threads at once; separate instances are independent. For a
-/// file from outside, see <see cref="KalkylLimits"/> and <see cref="HasMacros"/>. Error
+/// file from outside, see <see cref="KalkylLimits"/> and <see cref="ActiveContent"/>. Error
 /// messages name paths, sheets and cell contents: log them, but do not show them to whoever sent the file.
 /// </remarks>
 public sealed class Workbook
@@ -321,7 +323,8 @@ public sealed class Workbook
     /// True when the file has active content: a VBA project (.xlsm), Excel 4.0 macro sheets,
     /// dialog sheets or ActiveX controls. The package never runs any of it, but it keeps it when
     /// the file is saved, as it keeps everything it does not understand: opening and saving a
-    /// file does not make it safe. Use <see cref="RemoveMacros"/> for that.
+    /// file does not make it safe. <see cref="RemoveMacros"/> drops the VBA project, and
+    /// <see cref="RemoveActiveContent"/> all of <see cref="ActiveContent"/>.
     /// </summary>
     public bool HasMacros { get; private set; }
 
@@ -378,6 +381,109 @@ public sealed class Workbook
         return archive.Entries.Any(entry => IsVbaPart(entry.FullName) == true || IsWovenActiveContent(entry.FullName) == true);
     }
 
+    /// <summary>
+    /// What in the file can act on its own or fetch something when Excel opens it: macros (VBA,
+    /// Excel 4.0 macro sheets, dialog sheets), ActiveX controls, embedded OLE objects, external
+    /// references (links to other workbooks, DDE links and other external relationships) and data
+    /// connections (connections, query tables, Power Query). Found when the file is opened. The
+    /// package never runs, follows or refreshes any of it, but it keeps it when the file is saved,
+    /// so opening and saving a file does not make it safe; <see cref="RemoveActiveContent"/> does.
+    /// <see cref="ActiveContent.None"/> for a new workbook, and after <see cref="RemoveActiveContent"/>.
+    /// </summary>
+    public ActiveContent ActiveContent
+    {
+        get
+        {
+            if (RemovingActiveContent == true)
+            {
+                return ActiveContent.None;
+            }
+
+            return Scan.Found;
+        }
+    }
+
+    /// <summary>
+    /// The relationships to something outside the file that Excel follows on its own, unlike
+    /// hyperlinks: the path of each linked workbook, linked pictures and objects, a chart's
+    /// external data. A DDE link has no relationship; it is listed with the external link part it
+    /// is in, <see cref="OpcExternalRelationship.Kind"/> ddeLink and the target service|topic,
+    /// such as cmd|/c calc. Data connections are not listed; see <see cref="ActiveContent"/>.
+    /// Empty after <see cref="RemoveActiveContent"/>.
+    /// </summary>
+    public IReadOnlyList<OpcExternalRelationship> ExternalReferences
+    {
+        get
+        {
+            if (RemovingActiveContent == true)
+            {
+                return [];
+            }
+
+            return Scan.ExternalReferences;
+        }
+    }
+
+    /// <summary>True when <see cref="RemoveActiveContent"/> was called and the next save leaves the active content out.</summary>
+    internal bool RemovingActiveContent { get; private set; }
+
+    /// <summary>True when the next save drops the VBA project, after <see cref="RemoveMacros"/> or <see cref="RemoveActiveContent"/>.</summary>
+    internal bool DropsVba => RemovingMacros == true || RemovingActiveContent == true;
+
+    /// <summary>What was found in the package when it was opened.</summary>
+    internal PackageScan Scan { get; private init; } = PackageScan.Empty;
+
+    /// <summary>The opened file's sheet list, with the chart, macro and dialog sheets the model does not hold.</summary>
+    internal IReadOnlyList<DeclaredSheet> DeclaredSheets { get; private init; } = [];
+
+    /// <summary>
+    /// Makes the next save leave out all <see cref="ActiveContent"/> and write a plain .xlsx:
+    /// the VBA project (as <see cref="RemoveMacros"/> does), Excel 4.0 macro sheets and dialog
+    /// sheets with the defined names that start them (Auto_Open and the like), ActiveX controls
+    /// and OLE objects with their pictures in the sheets, data connections, query tables and
+    /// Power Query queries (a table a query filled becomes an ordinary table with the same data),
+    /// links to other workbooks and DDE links, and every other external relationship except
+    /// hyperlinks. A formula that refers to another workbook is replaced by the value it last
+    /// had, now and in the saved file, and a defined name that does becomes #REF!. What the
+    /// active content pointed to and nothing else used goes with it; so does a part of the file
+    /// that nothing pointed to. Save under a name ending in .xlsx.
+    /// </summary>
+    /// <returns>
+    /// Success, also when there is nothing to remove; Invalid when taking something out would
+    /// break the workbook or change what it shows: a pivot table or the data model (Power Pivot)
+    /// fed by a data connection, a chart drawn from another workbook, or an external relationship
+    /// in a part the package does not clean, such as a pivot table on another workbook.
+    /// </returns>
+    public Result RemoveActiveContent()
+    {
+        if (Scan.TryGetRemovalBlocker(out string reason) == true)
+        {
+            return Result.Invalid($"The workbook has {reason}, which the package cannot take out without breaking the workbook. Remove it in Excel.");
+        }
+
+        if (RemovingActiveContent == false && Scan.Found.HasFlag(ActiveContent.ExternalReferences) == true)
+        {
+            foreach (Worksheet sheet in sheets)
+            {
+                sheet.ReplaceExternalFormulas();
+            }
+
+            for (int index = 0; index < DefinedNames.Count; index++)
+            {
+                Formulas.DefinedName name = DefinedNames[index];
+
+                if (ActiveContentRules.HasExternalReference(name.Formula) == true)
+                {
+                    DefinedNames[index] = name with { Formula = "#REF!" };
+                }
+            }
+        }
+
+        RemovingActiveContent = true;
+
+        return Result.Success();
+    }
+
     /// <summary>True once a sheet's settings (widths, panes, filter, visibility) have changed.</summary>
     internal bool SettingsChanged { get; private set; }
 
@@ -407,7 +513,24 @@ public sealed class Workbook
 
         await using (reader)
         {
-            Workbook book = new(bytes, reader.Styles, reader.Uses1904Dates, reader.WorkbookPath) { Limits = limits, HasMacros = HasActiveContent(reader.Archive) };
+            PackageScan scan;
+
+            try
+            {
+                scan = await reader.GetScanAsync(cancellationToken);
+            }
+            catch (InvalidDataException exception)
+            {
+                return Result<Workbook>.Invalid(KalkylError.Describe(exception));
+            }
+
+            Workbook book = new(bytes, reader.Styles, reader.Uses1904Dates, reader.WorkbookPath)
+            {
+                Limits = limits,
+                HasMacros = HasActiveContent(reader.Archive),
+                Scan = scan,
+                DeclaredSheets = reader.DeclaredSheets,
+            };
 
             Result loaded = await DocumentLoader.LoadAsync(book, reader, cancellationToken);
 

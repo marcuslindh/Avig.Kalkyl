@@ -500,6 +500,32 @@ public sealed class Worksheet
         entry.Cells[column] = new CellEntry(Cell.Create(value, cell.Cell.Formula, cell.Cell.Style), null, cell.StyleIndex, cell.StyleFromFile);
     }
 
+    /// <summary>
+    /// Replaces every formula that refers to another workbook or a DDE link by the value it last
+    /// had, keeping the cell's style, for <see cref="Workbook.RemoveActiveContent"/>.
+    /// </summary>
+    internal void ReplaceExternalFormulas()
+    {
+        List<(RowEntry Row, int RowIndex, int Column, CellEntry Entry)> found = [];
+
+        foreach ((int rowIndex, RowEntry row) in rows)
+        {
+            foreach ((int column, CellEntry cell) in row.Cells)
+            {
+                if (cell.Cell.Formula is string formula && ActiveContentRules.HasExternalReference(formula) == true)
+                {
+                    found.Add((row, rowIndex, column, cell));
+                }
+            }
+        }
+
+        foreach ((RowEntry row, int rowIndex, int column, CellEntry cell) in found)
+        {
+            row.Cells[column] = new CellEntry(Cell.Create(cell.Cell.Value, null, cell.Cell.Style), null, cell.StyleIndex, cell.StyleFromFile);
+            Workbook.MarkChanged(this, rowIndex, column);
+        }
+    }
+
     private void Put(int row, int column, Cell value)
     {
         CellEntry? old = null;

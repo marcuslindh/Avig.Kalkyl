@@ -38,6 +38,7 @@ code does not have to.
 | Change cells in an existing file and save it | `Workbook.OpenAsync`, `Worksheet` | [12](#12-edit-an-existing-workbook), [13](#13-open-from-and-save-to-a-stream) |
 | Calculate formulas, or one formula on its own | `RecalculateAsync`, `Evaluate` | [14](#14-calculate-formulas) |
 | Add charts, pictures or conditional formatting | `AddChart`, `AddPicture`, `AddConditionalFormat` | [15](#15-charts)–[17](#17-conditional-formatting) |
+| Find macros, links and connections in a file from outside, and take them out | `Workbook.ActiveContent`, `RemoveActiveContent` | [19](#19-active-content) |
 
 ## 0. Results instead of exceptions
 
@@ -389,6 +390,7 @@ return "ok";
 | `MaxCells` | 20 million | The document model holding more cells. `XlsxReader` keeps one row at a time and is not affected. |
 | `MaxSharedStrings` | 10 million | More shared strings. They are read into memory when the file is opened, by `XlsxReader` too. |
 | `MaxArrayCells` | 10 million | One array in a formula holding more values, for example `A1:A100000*TRANSPOSE(A1:A100000)`. A larger one gives `#NUM!`. Sums, counts and the *IF functions over whole columns read only the cells that are there, so `SUM(A:XFD)` is quick however far away the last cell is. |
+| `StrictZip` | on | A zip file that says two things: a local header that differs from the zip directory, entries that overlap, or bytes before, between or after the entries. Such a file can show a virus scanner one workbook and Excel another, and no spreadsheet program writes one. It is damaged. Also on in `Unlimited`. |
 
 `KalkylLimits.Unlimited` turns them off for files you made yourself. More on what is always
 checked under [Files from outside](#files-from-outside).
@@ -814,7 +816,8 @@ pictures: `Worksheet.AddChart` and `AddPicture` return Invalid for them.
 
 A VBA project, Excel 4.0 macro sheets and ActiveX controls are never run, but like everything
 else the package does not understand they are kept when the file is saved. So opening and saving
-a file does not make it safe.
+a file does not make it safe. `RemoveMacros` drops a VBA project; for macro sheets, ActiveX
+controls and the rest, see [19. Active content](#19-active-content).
 
 <!-- example: macros -->
 ```csharp
@@ -838,6 +841,54 @@ if (book.HasMacros == true)
 await book.SaveAsync("clean.xlsx");         // without the VBA project, as an ordinary .xlsx
 ```
 
+## 19. Active content
+
+Macros are one of the ways a workbook can act on its own. `Workbook.ActiveContent` says which of
+them a file has: `Macros` (VBA, Excel 4.0 macro sheets and dialog sheets), `ActiveX`,
+`EmbeddedObjects` (OLE objects and packages), `ExternalReferences` (links to other workbooks, DDE
+links such as `=cmd|'/c calc'!A0`, and anything else outside the file that Excel fetches by
+itself; hyperlinks do not count) and `DataConnections` (connections, query tables and Power
+Query). `ExternalReferences` lists the links, with the part each is in; the type,
+`OpcExternalRelationship`, is in the namespace `Avig.OpenXml`. `RemoveActiveContent` makes the
+next save leave all of it out and write a plain .xlsx that Excel opens without repairing it. A
+formula that refers to another workbook keeps the value it last had, a table a query filled
+keeps its data, and the button of a form control stays.
+
+<!-- example: active-content -->
+```csharp
+// A zip file that says two things (KalkylLimits.StrictZip) is refused as damaged.
+if ((await Workbook.OpenAsync("upload.xlsx")).IsSuccess(out Workbook? book) == false)
+{
+    return;
+}
+
+if (book.ActiveContent != ActiveContent.None)
+{
+    Console.WriteLine(book.ActiveContent);   // Macros, ExternalReferences
+
+    foreach (OpcExternalRelationship link in book.ExternalReferences)
+    {
+        Console.WriteLine($"{link.Kind}: {link.Target}");   // externalLinkPath: file:///\fileserver\share\other.xlsx, ddeLink: cmd|/c calc
+    }
+
+    Result removed = book.RemoveActiveContent();   // Invalid for a pivot table or data model fed by a connection
+
+    if (removed.IsFailure(out string? error, out _) == true)
+    {
+        Console.WriteLine(error);
+
+        return;
+    }
+}
+
+await book.SaveAsync("clean.xlsx");   // no macro sheet, no links; the linked cells keep their last values
+```
+
+`XlsxReader.GetActiveContentAsync` and `GetExternalReferencesAsync` give the same answers
+without loading the sheets. `RemoveActiveContent` returns `Invalid`, and changes nothing, when
+taking something out would break the workbook: a pivot table or a data model (Power Pivot) that
+gets its data from a connection, or a chart drawn from another workbook.
+
 ## The API at a glance
 
 | Type | What it is | Scenario |
@@ -850,7 +901,7 @@ await book.SaveAsync("clean.xlsx");         // without the VBA project, as an or
 | `XlsxWriter`, `SheetWriter` | Streaming writer: `CreateAsync(path)` or `(stream, leaveOpen)`, `AddSheetAsync`, `CompleteAsync` (or `await using`); per sheet `SetColumnWidth`, `FreezePanes`, `EnableAutoFilter`, `WriteRowAsync`, `RowCount`, `IsFinished`. | 4, 5 |
 | `XlsxReader`, `SheetReader`, `SheetInfo`, `SheetVisibility` | Streaming reader: `OpenAsync(path or stream, limits)`, `Sheets` (`Name`, `Index`, `Visibility`: `Visible`, `Hidden`, `VeryHidden`), `Sheet(name or index)`, `ReadRowsAsync`, `Uses1904Dates`. | 6 |
 | `Row` | One row: `Index`, `Cells`, `ColumnCount`, `IsEmpty`, `row[column]`, `TryGetText`, `TryGetNumber`, `TryGetBool`, `TryGetDate`. | 6 |
-| `KalkylLimits` | `Default`, `Unlimited` and `with { MaxUncompressedBytes, MaxCells, MaxSharedStrings, MaxArrayCells }`. | 7 |
+| `KalkylLimits` | `Default`, `Unlimited` and `with { MaxUncompressedBytes, MaxCells, MaxSharedStrings, MaxArrayCells, StrictZip }`. | 7 |
 | `KalkylError`, `KalkylErrorKind` | `ErrorKind()` on a result or exception: `NotFound`, `NotXlsx`, `Damaged`, `TooLarge`, `Inaccessible`, `Unknown`. | 7 |
 | `CellValue`, `CellKind` | A value: `Text`, `Number`, `Bool`, `Date`, `Error` or `Empty`, with `TryGet…`. | 8 |
 | `Cell`, `Style`, `HorizontalAlignment`, `VerticalAlignment` | A value with a formula and a style. `Style` has `Bold`, `Italic`, `Underline`, `FontColor`, `FontSize`, `FontName`, `Background`, `NumberFormat`, `Horizontal` (`General`, `Left`, `Center`, `Right`, `Justify`), `Vertical` (`Bottom`, `Center`, `Top`) and `WrapText`. | 9 |
@@ -861,6 +912,7 @@ await book.SaveAsync("clean.xlsx");         // without the VBA project, as an or
 | `Picture`, `PictureFormat` | `FromFileAsync`, `FromBytes`, `Format` (`Png`, `Jpeg`, `Gif`), `Width`, `Height`, `Description`; `AddPicture` on both writers. | 16 |
 | `ConditionalFormat`, `ComparisonOperator`, `IconSetKind` | `AddConditionalFormat` on both writers. Comparisons `Equal`, `NotEqual`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual`; 17 icon sets from `ThreeArrows` to `FiveQuarters`. | 17 |
 | `Workbook.HasMacros`, `RemoveMacros` | Find and drop a VBA project. | 18 |
+| `ActiveContent`, `Workbook.ActiveContent`, `ExternalReferences`, `RemoveActiveContent` | What can act on its own (`Macros`, `ActiveX`, `EmbeddedObjects`, `ExternalReferences`, `DataConnections`), the external links as `OpcExternalRelationship` (`SourcePart`, `Kind`, `Target`), and a save without any of it. `XlsxReader.GetActiveContentAsync` and `GetExternalReferencesAsync` on the streaming reader. | 19 |
 
 ## What goes wrong, and how you hear about it
 
@@ -895,6 +947,13 @@ Some protections are always on and cannot be turned off:
 - The zip directory may not have two parts with the same name, a part without a name, or a
   name that climbs out of the package (`..`, `/x`, `C:/x`). An entry that cannot be unpacked
   makes the file damaged when it is opened, not when it is saved. Two sheets may not share a part.
+- The zip file must say one thing only (`KalkylLimits.StrictZip`, on by default): its local
+  headers as the zip directory has them, and nothing hidden before, between or after the entries.
+
+Macros, ActiveX controls, OLE objects, links to other workbooks, DDE links and data connections
+are never run, followed or refreshed, but they are kept when a workbook is saved, as everything
+else the package does not understand. Check `Workbook.ActiveContent` for a file from outside, and
+call `RemoveActiveContent` before you pass it on (see [19. Active content](#19-active-content)).
 
 The package never reaches the network, starts a process, loads code or deserializes objects,
 and it reads and writes only the paths you give it. DDE, external workbooks, `WEBSERVICE`,

@@ -205,7 +205,7 @@ public class ReaderTests
     [Theory]
     [InlineData(new byte[] { 0x48, 0x65, 0x6A, 0x21, 0x0A }, "not an .xlsx")]
     [InlineData(new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0, 0, 0 }, ".xls")]
-    [InlineData(new byte[] { 0x50, 0x4B, 0x03, 0x04, 1, 2, 3 }, "zip container is damaged")]
+    [InlineData(new byte[] { 0x50, 0x4B, 0x03, 0x04, 1, 2, 3 }, "too short to be a zip file")]
     public async Task Content_that_is_not_an_xlsx_is_Invalid_with_a_reason(byte[] content, string reason)
     {
         await using MemoryStream file = new(content);

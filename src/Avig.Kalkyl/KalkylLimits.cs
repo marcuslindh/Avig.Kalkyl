@@ -2,7 +2,7 @@ namespace Avig.Kalkyl;
 
 /// <summary>
 /// Limits on what a file may make the package do, so that a file from outside cannot run the
-/// process out of memory. An .xlsx is a zip file, and a few kilobytes of it can unpack to
+/// process out of memory, and how strictly the zip container is checked (<see cref="StrictZip"/>). An .xlsx is a zip file, and a few kilobytes of it can unpack to
 /// gigabytes. A file that goes past a limit gives Invalid when it is opened. A formula that goes
 /// past one gives #NUM!. Time is limited with the CancellationToken that every call takes, for
 /// example <c>new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token</c>.
@@ -54,4 +54,14 @@ public sealed record KalkylLimits
     /// A1:A100000*TRANSPOSE(A1:A100000). 10 million by default. A larger one gives #NUM!.
     /// </summary>
     public long MaxArrayCells { get; init; } = 10_000_000;
+
+    /// <summary>
+    /// Whether the zip file must say one thing only: every entry's local header as the zip
+    /// directory has it, no two entries sharing bytes, and no bytes before, between or after the
+    /// entries. True by default, also in <see cref="Unlimited"/>. Excel and every library that
+    /// writes .xlsx files leave no such room, and a file that has it can show a virus scanner one
+    /// workbook and Excel another. A file that fails is damaged. Turn it off only to read a file
+    /// you trust that some tool has appended to.
+    /// </summary>
+    public bool StrictZip { get; init; } = true;
 }

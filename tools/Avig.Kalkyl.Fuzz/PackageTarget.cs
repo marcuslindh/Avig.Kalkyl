@@ -281,9 +281,15 @@ internal static class PackageTarget
     }
 
     /// <summary>Reads every cell of every sheet with the streaming reader.</summary>
-    internal static async Task ReadEverythingAsync(Stream file)
+    internal static Task ReadEverythingAsync(Stream file)
     {
-        Result<XlsxReader> opened = await XlsxReader.OpenAsync(file, true);
+        return ReadEverythingAsync(file, KalkylLimits.Default);
+    }
+
+    /// <summary>Reads every cell of every sheet with the streaming reader, and asks it what active content the file has.</summary>
+    internal static async Task ReadEverythingAsync(Stream file, KalkylLimits limits)
+    {
+        Result<XlsxReader> opened = await XlsxReader.OpenAsync(file, limits, true);
 
         if (opened.IsSuccess(out XlsxReader? reader) == false)
         {
@@ -312,6 +318,9 @@ internal static class PackageTarget
                     Touch(row);
                 }
             }
+
+            _ = await reader.GetActiveContentAsync();
+            _ = await reader.GetExternalReferencesAsync();
         }
     }
 
@@ -319,9 +328,15 @@ internal static class PackageTarget
     /// Opens the file as a document, recalculates, changes a cell and saves. The saved file must
     /// open again and read through without being called damaged: the package wrote it.
     /// </summary>
-    internal static async Task EditAndSaveAsync(Stream file)
+    internal static Task EditAndSaveAsync(Stream file)
     {
-        Result<Workbook> opened = await Workbook.OpenAsync(file);
+        return EditAndSaveAsync(file, KalkylLimits.Default);
+    }
+
+    /// <summary>As <see cref="EditAndSaveAsync(Stream)"/>, with other limits, and then once more without active content.</summary>
+    internal static async Task EditAndSaveAsync(Stream file, KalkylLimits limits)
+    {
+        Result<Workbook> opened = await Workbook.OpenAsync(file, limits);
 
         if (opened.IsSuccess(out Workbook? book) == false)
         {
@@ -367,6 +382,49 @@ internal static class PackageTarget
         catch (InvalidDataException exception)
         {
             throw new InvariantViolationException("A workbook the package saved is called damaged by the package.", exception);
+        }
+
+        await RemoveActiveContentAsync(book);
+    }
+
+    /// <summary>
+    /// Removes the active content and saves. Unless the package said it could not, the saved file
+    /// must open again, have no active content and keep every sheet.
+    /// </summary>
+    private static async Task RemoveActiveContentAsync(Workbook book)
+    {
+        if (book.RemoveActiveContent().IsFailure(out _, out _) == true)
+        {
+            return;
+        }
+
+        await using MemoryStream cleaned = new();
+        await book.SaveAsync(cleaned);
+        await DumpAsync("cleaned.xlsx", cleaned);
+        cleaned.Position = 0;
+
+        try
+        {
+            Result<Workbook> reopened = await Workbook.OpenAsync(cleaned);
+
+            if (reopened.IsSuccess(out Workbook? again) == false)
+            {
+                throw new InvariantViolationException($"A workbook saved without active content cannot be opened again: {reopened.Error}");
+            }
+
+            if (again.ActiveContent != ActiveContent.None)
+            {
+                throw new InvariantViolationException($"A workbook saved without active content still has {again.ActiveContent}.");
+            }
+
+            if (again.Sheets.Count != book.Sheets.Count)
+            {
+                throw new InvariantViolationException($"The workbook had {book.Sheets.Count} sheets and {again.Sheets.Count} after its active content was removed.");
+            }
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new InvariantViolationException("A workbook saved without active content is called damaged by the package.", exception);
         }
     }
 

@@ -245,7 +245,13 @@ public class HostileFilesTests
         SetNameLength(bytes, "xl/zzzz.xml");
         await using MemoryStream file = new(bytes);
 
-        Assert.Contains("without a name", await RefusedAsync(file), StringComparison.Ordinal);
+        // The local header still has the name, so the strict zip check is the first to see it.
+        Assert.Contains("does not say one thing only", await RefusedAsync(file), StringComparison.Ordinal);
+
+        file.Position = 0;
+        Result<XlsxReader> lax = await XlsxReader.OpenAsync(file, KalkylLimits.Default with { StrictZip = false }, true);
+        Assert.True(lax.IsFailure(out string? error, out _));
+        Assert.Contains("without a name", error, StringComparison.Ordinal);
     }
 
     /// <summary>Sets the name length of an entry to 0 in its central directory record, as a damaged file can have it.</summary>

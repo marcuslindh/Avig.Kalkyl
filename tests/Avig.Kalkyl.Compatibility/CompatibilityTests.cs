@@ -81,6 +81,43 @@ public class CompatibilityTests
     }
 
     /// <summary>
+    /// Every workbook, saved by Excel or another program, passes the strict zip check
+    /// (KalkylLimits.StrictZip, on by default) in both readers. RemoveActiveContent on it gives a
+    /// file without active content that opens again; what each file had goes to the test output.
+    /// </summary>
+    [SkippableTheory]
+    [MemberData(nameof(Files))]
+    public async Task Every_file_passes_the_strict_zip_check_and_survives_RemoveActiveContent(string file)
+    {
+        string path = Find(file);
+        Result<XlsxReader> opened = await XlsxReader.OpenAsync(path);
+        Assert.True(opened.IsSuccess(out XlsxReader? reader), opened.Error);
+
+        await using (reader)
+        {
+            output.WriteLine($"Active content: {await reader.GetActiveContentAsync()}");
+        }
+
+        Workbook book = await OpenAsync(path);
+        Result removed = book.RemoveActiveContent();
+
+        if (removed.IsFailure(out string? error, out _) == true)
+        {
+            output.WriteLine($"Not removed: {error}");
+
+            return;
+        }
+
+        await using MemoryStream saved = new();
+        await book.SaveAsync(saved);
+        saved.Position = 0;
+        Result<Workbook> clean = await Workbook.OpenAsync(saved);
+        Assert.True(clean.IsSuccess(out Workbook? cleaned), clean.Error);
+        Assert.Equal(ActiveContent.None, cleaned.ActiveContent);
+        Assert.Equal(book.Sheets.Count, cleaned.Sheets.Count);
+    }
+
+    /// <summary>
     /// Opens the workbook, changes nothing, saves it, and reads both files with each other
     /// library. Saving must not change what any of them sees: the document model copies what it
     /// does not own and rewrites only the cells.

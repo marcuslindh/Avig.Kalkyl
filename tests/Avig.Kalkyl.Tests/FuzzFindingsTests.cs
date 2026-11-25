@@ -318,4 +318,38 @@ public class FuzzFindingsTests
         Assert.Equal("Other!#REF!+Data!#REF!", moved);
         Assert.True(FormulaParser.Parse(moved).IsSuccess(out _));
     }
+
+    /// <summary>
+    /// Found by xlsx-part and zip-raw: the reader finds xl/workbook.xml also when the package root
+    /// has no relationship to it, but RemoveActiveContent only kept what the root led to, so the
+    /// shared strings were left out and the saved file was damaged.
+    /// </summary>
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("empty")]
+    public async Task Without_root_relationships_RemoveActiveContent_keeps_what_the_workbook_uses(string root)
+    {
+        List<(string Path, string Content)> parts =
+        [
+            ("[Content_Types].xml", ContentTypes),
+            ("xl/workbook.xml", Workbook1),
+            ("xl/_rels/workbook.xml.rels", WorkbookRelationships.Replace("</Relationships>", $"<Relationship Id=\"rId3\" Type=\"{Relationships}/sharedStrings\" Target=\"sharedStrings.xml\"/></Relationships>", StringComparison.Ordinal)),
+            ("xl/styles.xml", Styles),
+            ("xl/sharedStrings.xml", $"""<sst xmlns="{Main}" count="1" uniqueCount="1"><si><t>kept</t></si></sst>"""),
+            ("xl/worksheets/sheet1.xml", $"""<worksheet xmlns="{Main}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"""),
+        ];
+
+        if (root == "empty")
+        {
+            parts.Add(("_rels/.rels", $"""<Relationships xmlns="{PackageRelationships}"/>"""));
+        }
+
+        await using MemoryStream file = TestFiles.Package([.. parts]);
+        Workbook book = await OpenAsync(file);
+        Assert.True(book.RemoveActiveContent().IsSuccess(out _, out _));
+
+        Workbook again = await SaveAndReopenAsync(book);
+
+        Assert.Equal((CellValue)"kept", again.Sheets[0]["A1"].Value);
+    }
 }

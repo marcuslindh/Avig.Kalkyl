@@ -54,6 +54,7 @@ internal static class Program
         await WriteChartsWithWriterAsync(Path.Combine(output, "10-charts-writer.xlsx"));
         await WriteChartsWithDocumentAsync(Path.Combine(output, "11-charts-document.xlsx"));
         await AddToCompatibilityFilesAsync(output);
+        await WriteActiveContentRemovedAsync(Path.Combine(output, "13-active-content-removed.xlsx"));
         await File.WriteAllLinesAsync(Path.Combine(output, "expected.txt"), Expected);
         Console.WriteLine($"Files in {output}. Open each in Excel and follow docs/excel-checklista.md; expected.txt has the values to compare.");
 
@@ -343,6 +344,25 @@ internal static class Program
         await book.RecalculateAsync(RecalculationScope.All);
         Check((await book.SaveAsync(path)).IsSuccess(out _, out _), "11");
         Expected.Add("11-charts-document.xlsx: the same sheet Data as 10, written by the document model (no Rapport sheet).");
+    }
+
+    /// <summary>
+    /// A workbook with every kind of active content (a VBA project, an Excel 4.0 macro sheet, a
+    /// dialog sheet, an ActiveX control next to a form button, an OLE object, a workbook link, a
+    /// DDE link, a linked picture, a query table on a connection and a Power Query query), saved
+    /// after RemoveActiveContent. Only the cleaned file is written.
+    /// </summary>
+    private static async Task WriteActiveContentRemovedAsync(string path)
+    {
+        Avig.Kalkyl.Tests.ActiveWorkbook source = new Avig.Kalkyl.Tests.ActiveWorkbook()
+            .AddVbaProject().AddMacroSheet().AddDialogSheet().AddActiveXControl().AddFormControl().AddOleObject()
+            .AddExternalWorkbookLink().AddDdeLink().AddLinkedPicture().AddHyperlink().AddDataMashup().AddQueryTable();
+        Result<Workbook> opened = await Workbook.OpenAsync(source.Build());
+        Check(opened.IsSuccess(out Workbook? book), opened.Error);
+        Result removed = book.RemoveActiveContent();
+        Check(removed.IsSuccess(out _, out _), removed.Error);
+        Check((await book.SaveAsync(path)).IsSuccess(out _, out _), path);
+        Expected.Add("13-active-content-removed.xlsx: one sheet, Data. Must open without repair and without a security warning, a links prompt or a refresh prompt. A1:A3 'N', 1, 2 as a table with a filter button; B1 = 84 and C1 = #N/A as values, not formulas; the button 'Button 2' and a picture frame without a picture (the link was removed); a hyperlink on A1 to https://example.com/. Formulas > Name Manager: Rate = #REF!, no Auto_Open. Data > Queries & Connections: empty.");
     }
 
     private static async Task AddToCompatibilityFilesAsync(string output)

@@ -46,6 +46,7 @@ För **varje** fil gäller:
 | `10-charts-writer.xlsx` | Sju diagram på bladet Data: stapel, liggande stapel (staplad), linje, yta (staplad), cirkel, ring och punkt, med titlar, axeltitlar och förklaringar som i `expected.txt`. Bilden i A10 i sin egen storlek och utsträckt över A16:C22. Reglerna i B, C och D och den gula fyllningen på raderna där D är under 50. Ändra B2 till 500: diagrammen följer med och B2 blir grön. Bladet Rapport har ett diagram över Data. | ☐ |
 | `11-charts-document.xlsx` | Samma blad Data som 10, skrivet av dokumentmodellen. | ☐ |
 | `12-added\*.xlsx` | Två rader under sista raden på första bladet: tre värden med blå datastaplar, ett stapeldiagram över dem och bilden. Filens egna diagram, bilder och regler finns kvar och ser ut som i originalet. | ☐ |
+| `13-active-content-removed.xlsx` | Gjord av en arbetsbok med allt aktivt innehåll (VBA, makroblad, dialogblad, ActiveX, OLE, länk till en annan arbetsbok, DDE, länkad bild, frågetabell, Power Query) efter `RemoveActiveContent`. Öppnas utan reparation, utan makro- eller säkerhetsvarning, utan fråga om att uppdatera länkar och utan fråga om att uppdatera data. Bara bladet Data. B1 = 84 och C1 = `#N/A` som värden, inte formler. A1:A3 är en vanlig tabell. Knappen "Button 2" finns kvar. Namnhanteraren: `Rate` = `#REF!`, inget `Auto_Open`. Data > Frågor och anslutningar är tom. | ☐ |
 | `09-roundtrip\*.xlsx` | Jämför med originalet i `tests/Avig.Kalkyl.Compatibility/files`: formatering, diagram, tabeller, pivottabeller, utsnitt, kommentarer, namn och dataverifiering. På första bladet finns en ny fet cell, "Avig.Kalkyl", under sista raden. | ☐ |
 
 För `09-roundtrip` räcker det att öppna alla 38 filer och se att ingen ger en dialogruta. Jämför
@@ -61,3 +62,4 @@ test i `CompatibilityFindingsTests.cs` eller `HostileFilesTests.cs` innan det r�
 | Datum | Excel-version (Arkiv > Konto > Om Excel) | Godkända | Fel |
 |---|---|---|---|
 | 2026-11-24 | 16.0, build 20625 (automatiskt via COM) | Steg 1 och 3 för alla 84 filer: ingen reparation, och samma värden efter omräkning. Steg 2 och det visuella i tabellen är inte gjort. Fil 07 och 08 saknades, eftersom ingen `.xlsm` angavs. | Inga |
+| 2026-11-25 | 16.0 (automatiskt via COM) | Steg 1 för alla 85 filer, med den nya fil 13: ingen reparation. Omräkning och det visuella är inte gjort. | Inga |

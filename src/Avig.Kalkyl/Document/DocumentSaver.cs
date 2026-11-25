@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Text;
 using System.Xml;
+using System.Xml.Linq;
 using Avig.Kalkyl.Internal;
 using Avig.Kalkyl.Reading;
 using Avig.Kalkyl.Writing;
@@ -22,6 +23,11 @@ namespace Avig.Kalkyl.Document;
 /// </summary>
 internal static class DocumentSaver
 {
+    private static readonly HashSet<string> NoShapes = new(StringComparer.Ordinal);
+
+    /// <summary>The defined names that start Excel 4.0 macros when the workbook opens or closes; Excel runs any name that begins so.</summary>
+    private static readonly string[] AutoMacroNames = ["Auto_Open", "Auto_Close", "Auto_Activate", "Auto_Deactivate"];
+
     private static readonly string[] WorkbookOrder =
     [
         "fileVersion", "fileSharing", "workbookPr", "workbookProtection", "bookViews", "sheets", "functionGroups",
@@ -76,7 +82,8 @@ internal static class DocumentSaver
         }
 
         await WritePartAsync(archive, "xl/styles.xml", styles.WriteAsync, cancellationToken);
-        await WritePartAsync(archive, "xl/workbook.xml", xml => WriteNewWorkbookAsync(xml, book, parts), cancellationToken);
+        SheetList sheetList = SheetList.Create(book, new HashSet<string>(StringComparer.Ordinal));
+        await WritePartAsync(archive, "xl/workbook.xml", xml => WriteNewWorkbookAsync(xml, book, parts, sheetList), cancellationToken);
         string stylesId = "rId" + SheetXml.Text(parts.Count + 1);
         await WritePartAsync(archive, "xl/_rels/workbook.xml.rels", xml => WriteNewWorkbookRelationshipsAsync(xml, parts, stylesId), cancellationToken);
         await WritePartAsync(archive, "[Content_Types].xml", xml => WriteNewContentTypesAsync(xml, parts, drawings), cancellationToken);
@@ -87,6 +94,14 @@ internal static class DocumentSaver
     {
         string workbookRelsPath = Ooxml.RelationshipsPath(workbookPath);
         (string? stylesPath, string? calcChainPath, HashSet<string> relationshipIds, HashSet<string> partPaths) = await ReadWorkbookRelationshipsAsync(original, workbookPath, workbookRelsPath, cancellationToken);
+        ActiveContentRemoval removal = ActiveContentRemoval.None;
+
+        if (book.RemovingActiveContent == true)
+        {
+            removal = await ActiveContentRemoval.CreateAsync(original, book.Scan, workbookPath, cancellationToken);
+        }
+
+        SheetList sheetList = SheetList.Create(book, removal.RemovedIds(workbookPath));
         bool mergeStyles = stylesPath is not null && XmlParts.TryFindEntry(original, stylesPath, out _);
         StyleRegistry styles = new();
 
@@ -106,7 +121,7 @@ internal static class DocumentSaver
         int nextSheetId = book.Sheets.Where(sheet => sheet.Source is not null).Select(sheet => sheet.Source!.SheetId).DefaultIfEmpty(0).Max() + 1;
         string workbookFolder = Folder(workbookPath);
         bool hasFormulas = book.Sheets.Any(sheet => sheet.RowEntries.Values.Any(row => row.Cells.Values.Any(cell => cell.Cell.Formula is not null)));
-        DrawingPackage drawings = new(archive, partPaths);
+        DrawingPackage drawings = new(archive, partPaths) { Removal = removal };
 
         foreach (Worksheet sheet in book.Sheets)
         {
@@ -139,7 +154,7 @@ internal static class DocumentSaver
                     firstPriority = await MaxPriorityAsync(sheetEntry, cancellationToken) + 1;
                 }
 
-                await WritePartAsync(archive, sheetEntry.FullName, xml => WritePatchedSheetAsync(xml, sheetEntry, sheet, styles, book.Uses1904Dates, drawingId, firstPriority, cancellationToken), cancellationToken);
+                await WritePartAsync(archive, sheetEntry.FullName, xml => WritePatchedSheetAsync(xml, sheetEntry, sheet, styles, book.Uses1904Dates, drawingId, firstPriority, removal, cancellationToken), cancellationToken);
 
                 continue;
             }
@@ -207,9 +222,9 @@ internal static class DocumentSaver
         }
 
         XmlParts.TryFindEntry(original, workbookPath, out ZipArchiveEntry? workbookEntry);
-        await WritePartAsync(archive, workbookPath, xml => WritePatchedWorkbookAsync(xml, workbookEntry!, book, added, hasFormulas, cancellationToken), cancellationToken);
-        await WritePartAsync(archive, workbookRelsPath, xml => WritePatchedWorkbookRelationshipsAsync(xml, original, workbookRelsPath, added, addedStylesId, book.RemovingMacros, cancellationToken), cancellationToken);
-        await WritePartAsync(archive, "[Content_Types].xml", xml => WritePatchedContentTypesAsync(xml, original, book, workbookPath, added, calcChainPath, addedStylesId is not null, stylesPath, drawings, cancellationToken), cancellationToken);
+        await WritePartAsync(archive, workbookPath, xml => WritePatchedWorkbookAsync(xml, workbookEntry!, book, added, hasFormulas, sheetList, removal, cancellationToken), cancellationToken);
+        await WritePartAsync(archive, workbookRelsPath, xml => WritePatchedWorkbookRelationshipsAsync(xml, original, workbookRelsPath, added, addedStylesId, book.DropsVba, removal.RemovedIds(workbookPath), cancellationToken), cancellationToken);
+        await WritePartAsync(archive, "[Content_Types].xml", xml => WritePatchedContentTypesAsync(xml, original, book, workbookPath, added, calcChainPath, addedStylesId is not null, stylesPath, drawings, removal, cancellationToken), cancellationToken);
 
         foreach (ZipArchiveEntry entry in original.Entries)
         {
@@ -220,14 +235,37 @@ internal static class DocumentSaver
                 continue;
             }
 
-            if (book.RemovingMacros == true && Workbook.IsVbaPart(name) == true)
+            if ((book.DropsVba == true && Workbook.IsVbaPart(name) == true) || removal.Keeps(name) == false)
             {
                 continue;
             }
 
+            if (Avig.OpenXml.OpcPath.TryGetSourcePart(name, out string? sourcePart) == true && removal.RemovedIds(sourcePart).Count > 0)
+            {
+                IReadOnlySet<string> removedIds = removal.RemovedIds(sourcePart);
+                await WritePartAsync(archive, entry.FullName, async xml =>
+                {
+                    await xml.WriteStartDocumentAsync(true);
+                    await xml.WriteStartElementAsync(null, "Relationships", Ooxml.PackageRelationshipsNamespace);
+                    await ActiveContentRemoval.CopyRelationshipsAsync(entry, xml, removedIds, cancellationToken);
+                    await xml.WriteEndElementAsync();
+                    await xml.WriteEndDocumentAsync();
+                }, cancellationToken);
+
+                continue;
+            }
+
             ZipArchiveEntry copy = archive.CreateEntry(entry.FullName, CompressionLevel.Optimal);
-            await using Stream source = await XmlParts.OpenEntryAsync(entry, cancellationToken);
             await using Stream target = await copy.OpenAsync(cancellationToken);
+
+            if (removal.Rewrites(name) == true)
+            {
+                await removal.WriteCleanedAsync(entry, target, cancellationToken);
+
+                continue;
+            }
+
+            await using Stream source = await XmlParts.OpenEntryAsync(entry, cancellationToken);
             await source.CopyToAsync(target, cancellationToken);
         }
     }
@@ -325,7 +363,7 @@ internal static class DocumentSaver
         {
             await xml.WriteStartDocumentAsync(true);
             await xml.WriteStartElementAsync(null, "Relationships", Ooxml.PackageRelationshipsNamespace);
-            await DrawingPackage.CopyRelationshipsAsync(original, relsPath, xml, cancellationToken);
+            await DrawingPackage.CopyRelationshipsAsync(original, relsPath, xml, drawings.Removal.RemovedIds(sheetPath), cancellationToken);
             await DrawingXml.WriteRelationshipElementsAsync(xml, added);
             await xml.WriteEndElementAsync();
             await xml.WriteEndDocumentAsync();
@@ -389,9 +427,10 @@ internal static class DocumentSaver
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WritePatchedSheetAsync(XmlWriter xml, ZipArchiveEntry entry, Worksheet sheet, StyleRegistry styles, bool uses1904, string? drawingId, int firstPriority, CancellationToken cancellationToken)
+    private static async Task WritePatchedSheetAsync(XmlWriter xml, ZipArchiveEntry entry, Worksheet sheet, StyleRegistry styles, bool uses1904, string? drawingId, int firstPriority, ActiveContentRemoval removal, CancellationToken cancellationToken)
     {
         SheetSource source = sheet.Source!;
+        IReadOnlySet<string> removedIds = removal.RemovedIds(entry.FullName.Replace('\\', '/'));
         await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
         using XmlReader reader = XmlParts.CreateReader(stream);
         await reader.MoveToContentAsync();
@@ -476,6 +515,20 @@ internal static class DocumentSaver
                 if (owned.Contains(name) == true)
                 {
                     await reader.SkipAsync();
+
+                    continue;
+                }
+
+                // Without active content the OLE objects and ActiveX controls go, and elements that
+                // need a relationship that is left out (see ActiveContentRemoval).
+                if (removal.IsActive == true)
+                {
+                    XElement element = (XElement)await XNode.ReadFromAsync(reader, cancellationToken);
+
+                    if (ActiveContentRemoval.Clean(element, removedIds, NoShapes) == true)
+                    {
+                        await element.WriteToAsync(xml, cancellationToken);
+                    }
 
                     continue;
                 }
@@ -574,7 +627,7 @@ internal static class DocumentSaver
         await xml.WriteEndElementAsync();
     }
 
-    private static async Task WriteNewWorkbookAsync(XmlWriter xml, Workbook book, List<NewSheet> parts)
+    private static async Task WriteNewWorkbookAsync(XmlWriter xml, Workbook book, List<NewSheet> parts, SheetList sheetList)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "workbook", Ooxml.SpreadsheetNamespace);
@@ -582,8 +635,8 @@ internal static class DocumentSaver
         await xml.WriteStartElementAsync(null, "bookViews", null);
         await xml.WriteElementStringAsync(null, "workbookView", null, string.Empty);
         await xml.WriteEndElementAsync();
-        await WriteSheetListAsync(xml, book, parts, Ooxml.RelationshipsNamespace);
-        await WriteFilterNamesAsync(xml, book, [], true);
+        await WriteSheetListAsync(xml, sheetList, parts, Ooxml.RelationshipsNamespace);
+        await WriteFilterNamesAsync(xml, book, sheetList, [], true);
 
         if (book.Sheets.Any(sheet => sheet.RowEntries.Values.Any(row => row.Cells.Values.Any(cell => cell.Cell.Formula is not null))) == true)
         {
@@ -597,7 +650,7 @@ internal static class DocumentSaver
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WritePatchedWorkbookAsync(XmlWriter xml, ZipArchiveEntry entry, Workbook book, List<NewSheet> added, bool hasFormulas, CancellationToken cancellationToken)
+    private static async Task WritePatchedWorkbookAsync(XmlWriter xml, ZipArchiveEntry entry, Workbook book, List<NewSheet> added, bool hasFormulas, SheetList sheetList, ActiveContentRemoval removal, CancellationToken cancellationToken)
     {
         await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
         using XmlReader reader = XmlParts.CreateReader(stream);
@@ -623,8 +676,8 @@ internal static class DocumentSaver
         await xml.WriteAttributesAsync(reader, true);
         Dictionary<string, Func<Task>> pending = new(StringComparer.Ordinal)
         {
-            ["sheets"] = () => WriteSheetListAsync(xml, book, added, relationshipsNamespace),
-            ["definedNames"] = () => WriteFilterNamesAsync(xml, book, [], true),
+            ["sheets"] = () => WriteSheetListAsync(xml, sheetList, added, relationshipsNamespace),
+            ["definedNames"] = () => WriteFilterNamesAsync(xml, book, sheetList, [], true),
         };
 
         if (hasFormulas == true)
@@ -668,14 +721,14 @@ internal static class DocumentSaver
                 {
                     case "sheets":
                         pending.Remove(name);
-                        await WriteSheetListAsync(xml, book, added, relationshipsNamespace);
+                        await WriteSheetListAsync(xml, sheetList, added, relationshipsNamespace);
                         await reader.SkipAsync();
 
                         break;
 
                     case "definedNames":
                         pending.Remove(name);
-                        await CopyDefinedNamesAsync(xml, reader, book);
+                        await CopyDefinedNamesAsync(xml, reader, book, sheetList, removal);
 
                         break;
 
@@ -683,6 +736,20 @@ internal static class DocumentSaver
                         pending.Remove(name);
                         await WriteCalcPropertiesAsync(xml, reader);
                         await reader.SkipAsync();
+
+                        break;
+
+                    // Every external link is left out, so the list of them goes too.
+                    case "externalReferences" when removal.IsActive == true:
+                        await reader.SkipAsync();
+
+                        break;
+
+                    // The active tab and the first tab shown count positions in the sheet list.
+                    case "bookViews" when sheetList.HasDropped == true:
+                        XElement views = (XElement)await XNode.ReadFromAsync(reader, cancellationToken);
+                        MoveTabs(views, sheetList);
+                        await views.WriteToAsync(xml, cancellationToken);
 
                         break;
 
@@ -699,25 +766,61 @@ internal static class DocumentSaver
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WriteSheetListAsync(XmlWriter xml, Workbook book, List<NewSheet> added, string relationshipsNamespace)
+    /// <summary>Points activeTab and firstSheet at the positions their sheets have in the list written, or at the next sheet kept.</summary>
+    private static void MoveTabs(XElement views, SheetList sheetList)
+    {
+        foreach (XElement view in views.Elements().Where(element => element.Name.LocalName == "workbookView"))
+        {
+            foreach (string attribute in new[] { "activeTab", "firstSheet" })
+            {
+                if (int.TryParse((string?)view.Attribute(attribute), NumberStyles.None, CultureInfo.InvariantCulture, out int position) == true)
+                {
+                    view.SetAttributeValue(attribute, SheetXml.Text(sheetList.MapNearest(position)));
+                }
+            }
+        }
+    }
+
+    private static async Task WriteSheetListAsync(XmlWriter xml, SheetList sheetList, List<NewSheet> added, string relationshipsNamespace)
     {
         await xml.WriteStartElementAsync(null, "sheets", null);
 
-        foreach (Worksheet sheet in book.Sheets)
+        foreach (SheetSlot slot in sheetList.Slots)
         {
+            string name;
             string relationshipId;
             int sheetId;
-            NewSheet? newPart = added.Find(part => ReferenceEquals(part.Sheet, sheet) == true);
+            SheetVisibility visibility;
 
-            if (newPart is not null)
+            if (slot.Model is Worksheet sheet)
             {
-                relationshipId = newPart.RelationshipId;
-                sheetId = newPart.SheetId;
+                NewSheet? newPart = added.Find(part => ReferenceEquals(part.Sheet, sheet) == true);
+
+                if (newPart is not null)
+                {
+                    relationshipId = newPart.RelationshipId;
+                    sheetId = newPart.SheetId;
+                }
+                else if (sheet.Source is not null)
+                {
+                    relationshipId = sheet.Source.RelationshipId;
+                    sheetId = sheet.Source.SheetId;
+                }
+                else
+                {
+                    continue;
+                }
+
+                name = sheet.Name;
+                visibility = sheet.Visibility;
             }
-            else if (sheet.Source is not null)
+            else if (slot.Original is DeclaredSheet original)
             {
-                relationshipId = sheet.Source.RelationshipId;
-                sheetId = sheet.Source.SheetId;
+                // A chart, macro or dialog sheet the model does not hold, written as it was.
+                name = original.Name;
+                relationshipId = original.RelationshipId;
+                sheetId = original.SheetId;
+                visibility = original.Visibility;
             }
             else
             {
@@ -725,14 +828,14 @@ internal static class DocumentSaver
             }
 
             await xml.WriteStartElementAsync(null, "sheet", null);
-            await xml.WriteAttributeStringAsync(null, "name", null, sheet.Name);
+            await xml.WriteAttributeStringAsync(null, "name", null, name);
             await xml.WriteAttributeStringAsync(null, "sheetId", null, SheetXml.Text(sheetId));
 
-            if (sheet.Visibility == SheetVisibility.Hidden)
+            if (visibility == SheetVisibility.Hidden)
             {
                 await xml.WriteAttributeStringAsync(null, "state", null, "hidden");
             }
-            else if (sheet.Visibility == SheetVisibility.VeryHidden)
+            else if (visibility == SheetVisibility.VeryHidden)
             {
                 await xml.WriteAttributeStringAsync(null, "state", null, "veryHidden");
             }
@@ -746,9 +849,12 @@ internal static class DocumentSaver
 
     /// <summary>
     /// Copies the defined names, except the filter ranges of sheets whose filter changed, and
-    /// adds the filter ranges the model needs.
+    /// adds the filter ranges the model needs. localSheetId is moved to the sheet's position in
+    /// the list written, and a name of a sheet left out goes with it. When active content is
+    /// removed, so are the names that start macros, and a name that refers to another workbook
+    /// becomes #REF!.
     /// </summary>
-    private static async Task CopyDefinedNamesAsync(XmlWriter xml, XmlReader reader, Workbook book)
+    private static async Task CopyDefinedNamesAsync(XmlWriter xml, XmlReader reader, Workbook book, SheetList sheetList, ActiveContentRemoval removal)
     {
         List<string> kept = [];
         int depth = reader.Depth;
@@ -768,39 +874,132 @@ internal static class DocumentSaver
                 }
 
                 bool isFilter = string.Equals(reader.GetAttribute("name"), "_xlnm._FilterDatabase", StringComparison.Ordinal);
-                int.TryParse(reader.GetAttribute("localSheetId"), NumberStyles.None, CultureInfo.InvariantCulture, out int localSheet);
-                bool replace = isFilter == true && localSheet < book.Sheets.Count && book.Sheets[localSheet].FilterChanged == true;
+                bool hasSheet = int.TryParse(reader.GetAttribute("localSheetId"), NumberStyles.None, CultureInfo.InvariantCulture, out int localSheet);
+                int written = -1;
+                bool keep = true;
 
-                if (isFilter == true)
+                if (hasSheet == true)
                 {
-                    filterNamesPresent.Add(localSheet);
+                    keep = sheetList.TryMapOriginal(localSheet, out written);
+                }
+
+                bool replace = isFilter == true && keep == true && IsFilterChanged(sheetList, written) == true;
+
+                if (isFilter == true && keep == true)
+                {
+                    filterNamesPresent.Add(written);
                 }
 
                 string declaration = " xmlns=\"" + reader.NamespaceURI + "\"";
-                string outer = RemoveFirst(await reader.ReadOuterXmlAsync(), declaration);
+                string outer = await reader.ReadOuterXmlAsync();
 
-                if (replace == false)
+                if (keep == false || replace == true)
                 {
-                    kept.Add(outer);
+                    continue;
                 }
+
+                XElement name = XElement.Parse(outer);
+                bool changed = false;
+
+                if (removal.IsActive == true)
+                {
+                    if (StartsMacro(name, sheetList) == true)
+                    {
+                        continue;
+                    }
+
+                    if (ActiveContentRules.HasExternalReference(name.Value) == true)
+                    {
+                        name.Value = "#REF!";
+                        changed = true;
+                    }
+                }
+
+                if (hasSheet == true && written != localSheet)
+                {
+                    name.SetAttributeValue("localSheetId", SheetXml.Text(written));
+                    changed = true;
+                }
+
+                if (changed == true)
+                {
+                    outer = name.ToString(SaveOptions.DisableFormatting);
+                }
+
+                kept.Add(RemoveFirst(outer, declaration));
             }
         }
 
         await reader.ReadAsync();
-        await WriteFilterNamesAsync(xml, book, kept, false, filterNamesPresent);
+        await WriteFilterNamesAsync(xml, book, sheetList, kept, false, filterNamesPresent);
     }
 
-    private static async Task WriteFilterNamesAsync(XmlWriter xml, Workbook book, List<string> kept, bool all, HashSet<int>? present = null)
+    private static bool IsFilterChanged(SheetList sheetList, int written)
+    {
+        return written >= 0 && written < sheetList.Slots.Count && sheetList.Slots[written].Model is Worksheet sheet && sheet.FilterChanged == true;
+    }
+
+    /// <summary>
+    /// True for a defined name that starts or belongs to a macro: Auto_Open and its kin, a name
+    /// marked as an Excel 4.0 macro, function or VBA procedure, or one that points into a macro
+    /// or dialog sheet that is left out.
+    /// </summary>
+    private static bool StartsMacro(XElement name, SheetList sheetList)
+    {
+        string text = (string?)name.Attribute("name") ?? string.Empty;
+
+        if (AutoMacroNames.Any(prefix => text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == true) == true)
+        {
+            return true;
+        }
+
+        foreach (string flag in new[] { "xlm", "function", "vbProcedure" })
+        {
+            if ((string?)name.Attribute(flag) is "1" or "true")
+            {
+                return true;
+            }
+        }
+
+        return sheetList.DroppedNames.Any(sheet => RefersToSheet(name.Value, sheet) == true);
+    }
+
+    /// <summary>True when a formula refers to the sheet by name: Sheet1!A1 or 'Sheet 1'!A1.</summary>
+    private static bool RefersToSheet(string formula, string sheet)
+    {
+        if (formula.Contains("'" + sheet.Replace("'", "''", StringComparison.Ordinal) + "'!", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return true;
+        }
+
+        string plain = sheet + "!";
+        int index = formula.IndexOf(plain, StringComparison.OrdinalIgnoreCase);
+
+        while (index >= 0)
+        {
+            if (index == 0 || (char.IsLetterOrDigit(formula[index - 1]) == false && formula[index - 1] is not ('_' or '.')))
+            {
+                return true;
+            }
+
+            index = formula.IndexOf(plain, index + 1, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static async Task WriteFilterNamesAsync(XmlWriter xml, Workbook book, SheetList sheetList, List<string> kept, bool all, HashSet<int>? present = null)
     {
         List<(int Index, string Range)> filters = [];
 
         foreach (Worksheet sheet in book.Sheets)
         {
-            bool needsName = all == true || sheet.FilterChanged == true || sheet.Source is null || present?.Contains(sheet.Index) == false;
+            int position = sheetList.WrittenIndexOf(sheet);
+            bool needsName = all == true || sheet.FilterChanged == true || sheet.Source is null || present?.Contains(position) == false;
 
             if (needsName == true && sheet.AutoFilter == true && TryGetFilterEnd(sheet, out CellAddress end) == true)
             {
-                filters.Add((sheet.Index, "'" + sheet.Name.Replace("'", "''", StringComparison.Ordinal) + "'!$A$1:$" + CellAddress.ColumnName(end.Column) + "$" + SheetXml.Text(end.Row + 1)));
+                filters.Add((position, "'" + sheet.Name.Replace("'", "''", StringComparison.Ordinal) + "'!$A$1:$" + CellAddress.ColumnName(end.Column) + "$" + SheetXml.Text(end.Row + 1)));
             }
         }
 
@@ -861,7 +1060,7 @@ internal static class DocumentSaver
         await xml.WriteEndElementAsync();
     }
 
-    private static async Task WritePatchedWorkbookRelationshipsAsync(XmlWriter xml, ZipArchive original, string relsPath, List<NewSheet> added, string? addedStylesId, bool removeMacros, CancellationToken cancellationToken)
+    private static async Task WritePatchedWorkbookRelationshipsAsync(XmlWriter xml, ZipArchive original, string relsPath, List<NewSheet> added, string? addedStylesId, bool removeMacros, IReadOnlySet<string> removedIds, CancellationToken cancellationToken)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Relationships", Ooxml.PackageRelationshipsNamespace);
@@ -882,7 +1081,9 @@ internal static class DocumentSaver
 
                 string relationshipType = reader.GetAttribute("Type") ?? string.Empty;
 
-                if (Ooxml.IsRelationship(relationshipType, "calcChain") == true || (removeMacros == true && relationshipType.EndsWith("/vbaProject", StringComparison.Ordinal) == true))
+                bool removed = reader.GetAttribute("Id") is string id && removedIds.Contains(id) == true;
+
+                if (removed == true || Ooxml.IsRelationship(relationshipType, "calcChain") == true || (removeMacros == true && relationshipType.EndsWith("/vbaProject", StringComparison.Ordinal) == true))
                 {
                     await reader.SkipAsync();
 
@@ -929,7 +1130,7 @@ internal static class DocumentSaver
         await xml.WriteEndElementAsync();
     }
 
-    private static async Task WritePatchedContentTypesAsync(XmlWriter xml, ZipArchive original, Workbook book, string workbookPath, List<NewSheet> added, string? calcChainPath, bool addStyles, string? stylesPath, DrawingPackage drawings, CancellationToken cancellationToken)
+    private static async Task WritePatchedContentTypesAsync(XmlWriter xml, ZipArchive original, Workbook book, string workbookPath, List<NewSheet> added, string? calcChainPath, bool addStyles, string? stylesPath, DrawingPackage drawings, ActiveContentRemoval removal, CancellationToken cancellationToken)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Types", Ooxml.ContentTypesNamespace);
@@ -958,9 +1159,12 @@ internal static class DocumentSaver
                 string? partName = reader.GetAttribute("PartName");
                 string contentType = reader.GetAttribute("ContentType") ?? string.Empty;
                 bool calcChain = reader.LocalName == "Override" && calcChainPart is not null && string.Equals(partName, calcChainPart, StringComparison.OrdinalIgnoreCase) == true;
-                bool macro = book.RemovingMacros == true && (string.Equals(contentType, VbaProjectContentType, StringComparison.OrdinalIgnoreCase) == true || (partName is not null && Workbook.IsVbaPart(partName) == true));
+                bool macro = book.DropsVba == true && (string.Equals(contentType, VbaProjectContentType, StringComparison.OrdinalIgnoreCase) == true || (partName is not null && Workbook.IsVbaPart(partName) == true));
 
-                if (calcChain == true || macro == true)
+                // An override for a part that is left out would name a part the package does not have.
+                bool removed = reader.LocalName == "Override" && partName is not null && removal.Keeps(partName.TrimStart('/')) == false;
+
+                if (calcChain == true || macro == true || removed == true)
                 {
                     await reader.SkipAsync();
 
@@ -968,7 +1172,7 @@ internal static class DocumentSaver
                 }
 
                 // Without its VBA project the workbook is a plain one, and says so.
-                if (book.RemovingMacros == true && MacroEnabledTypes.TryGetValue(contentType, out string? plain) == true)
+                if (book.DropsVba == true && MacroEnabledTypes.TryGetValue(contentType, out string? plain) == true)
                 {
                     contentType = plain;
                 }

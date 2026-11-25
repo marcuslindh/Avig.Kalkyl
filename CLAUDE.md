@@ -56,6 +56,22 @@ vara verifierat genom sabotage (tabellen i README:n).
 - **Säkert för trimning och AOT** (`IsAotCompatible`). Ingen reflektion; den typade
   mappningen i milstolpe 2 blir en källgenerator.
 - **En fil utifrån får inte kunna ta slut på minnet eller stacken.** Allt som läser en zip-post går via `XmlParts.OpenEntryAsync`, alla XmlReader skapas med `XmlParts.CreateReader` (djupgräns 100), och allt som skapar en matris går via `ValueArray` (`KalkylLimits.MaxArrayCells`). Ingen rekursion som växer med indata utan gräns: parsern begränsar nästling, och evaluatorn går igenom operatorkedjor i en loop. Aggregat över stora områden går via `FunctionCall.NonBlankValues` eller rutnätets `StoredValues`, inte position för position. Nya attackfiler blir tester i `HostileFilesTests.cs`; testplanen är `docs/testplan.md`.
+- **Aktivt innehåll och strikt zip.** `KalkylLimits.StrictZip` (på som standard, också i
+  `Unlimited`) gör att `XlsxReader.OpenSeekableAsync` kör `OpcZip.CheckStructureAsync` innan
+  `ZipArchive` skapas. Alla vägar in (läsaren, dokumentmodellen, den typade läsningen) går dit,
+  och en ny väg in måste också göra det. `PackageScan` går en gång igenom innehållstyper,
+  relationer, externa länkar (DDE) och customXml (Power Query) och ger `Workbook.ActiveContent`,
+  `Workbook.ExternalReferences` och `XlsxReader.GetActiveContentAsync`. Vad som räknas står i
+  `ActiveContentRules`; enumvärdena delas med Avig.Ord. `RemoveActiveContent` går via
+  `ActiveContentRemoval`: relationerna till aktivt innehåll markeras, de delar som fortfarande går
+  att nå från roten behålls (allt annat följer inte med), och kvarvarande delar som pekade på
+  något borttaget städas när de kopieras. Det som inte går att ta bort utan att arbetsboken går
+  sönder (pivottabell eller datamodell på en anslutning, diagram från en annan arbetsbok) ger
+  `Invalid` direkt i `RemoveActiveContent`. Bladlistan skrivs via `SheetList`, som behåller
+  diagram-, makro- och dialogblad på sina platser så att `localSheetId` och `activeTab` stämmer.
+  Testerna finns i `ActiveContentTests.cs` och `StrictZipTests.cs`; filerna byggs av
+  `ActiveWorkbook`, som också ExcelCheck-fil 13 använder. En rensad fil ska öppnas i Excel utan
+  reparation.
 - **Ett fel om en fil ska få en felkod.** Meddelanden om skadade filer börjar med `The file is damaged`, meddelanden om gränser innehåller `the limit set in KalkylLimits.`, och meddelanden om filer som inte är .xlsx börjar med `The file is not an .xlsx workbook`. Det är så `KalkylError.ErrorKind()` känner igen dem. Ett `InvalidDataException` som blir ett `Result` går via `KalkylError.Describe`. Fuzzern och `HostileFilesTests` kräver en felkod för varje fil som avvisas.
 - **Läs XML på lokalt namn**, inte namnrymd, så att Strict OOXML fungerar. Ingen DTD.
 - **Det som skrivs ska klara Microsofts schemavalidator.** Testet

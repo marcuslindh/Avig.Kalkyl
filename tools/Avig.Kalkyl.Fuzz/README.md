@@ -13,9 +13,9 @@ The project is not part of the package: `publish.ps1` packs only `src/Avig.Kalky
 
 | Target | Kind | What it checks |
 |---|---|---|
-| `xlsx-part` | crash and invariant | One part of a valid workbook is replaced by the input. The file is read with the streaming reader and opened in the document model. It is then recalculated, changed and saved. The saved file must open and read through again, with the change and every sheet still there. |
+| `xlsx-part` | crash and invariant | One part of a valid workbook is replaced by the input. The file is read with the streaming reader and opened in the document model. It is then recalculated, changed and saved. The saved file must open and read through again, with the change and every sheet still there. Then its active content is removed and it is saved again: unless `RemoveActiveContent` refused, that file must open, with no active content and every sheet. |
 | `attribute-sweep` | crash and invariant | Every number attribute of the template (style and font indexes, row and column numbers, counts, sizes, sheet ids) gets each of 18 edge values in turn, with the harness of `xlsx-part`. About 2,000 inputs; run with `--iter 3000`. |
-| `zip-raw` | crash | The bytes of the valid template workbook are mutated where the zip structure is: fields in local headers and the central directory (sizes, offsets, compression method, name lengths), a truncated file, junk in front, and repeated chunks. |
+| `zip-raw` | crash | The bytes of the valid template workbook are mutated where the zip structure is: fields in local headers and the central directory (sizes, offsets, compression method, name lengths), a truncated file, junk in front, and repeated chunks. Each input is read with `KalkylLimits.StrictZip` on, which refuses most of them at once, and then with it off, so that the checks behind it are reached too. |
 | `formula` | crash | The formula engine gets any formula text. **Every** exception is a finding. |
 | `formula-sweep` | crash | The same harness as `formula`, but every function is called in turn with every pair of edge values. |
 | `formula-shift` | invariant | A formula moved there and back is unchanged. Moving it by nothing changes nothing. If the formula parses, the moved one parses too. |
@@ -54,7 +54,7 @@ guidance instead.
 
 ## Findings
 
-The first round found thirteen bugs. Later rounds found three more: deep formulas, two sheets on one part, and an entry without a name, after the security test plan (`docs/testplan.md`) had shown where to look. All are fixed and have regression tests in
+The first round found thirteen bugs. Later rounds found four more: deep formulas, two sheets on one part, and an entry without a name, after the security test plan (`docs/testplan.md`) had shown where to look, and a workbook without root relationships that lost its shared strings in `RemoveActiveContent`. All are fixed and have regression tests in
 `tests/Avig.Kalkyl.Tests/FuzzFindingsTests.cs`:
 
 | Target | Bug | Effect |
@@ -70,6 +70,7 @@ The first round found thirteen bugs. Later rounds found three more: deep formula
 | `formula` | `REPT` with empty text and a count above `int.MaxValue`. The limit check multiplied, and could also overflow. | `ArgumentOutOfRangeException`. |
 | `formula` (added later) | About 820 nested parentheses, 700 terms of `1+1+…+1`, or 730 nested functions overflowed the stack. The parser and the evaluator recursed once per level, and the evaluator also recursed once per term of a left-associative chain. | **The process ended.** A stack overflow cannot be caught, so one formula from a user or a file brought down the program. Nesting is now limited to 255 levels and functions inside functions to Excel's 64; deeper gives Invalid. Chains are evaluated in a loop, and the evaluator checks how much stack is left. |
 | `xlsx-part` (added later) | Two `<sheet>` elements with the same relationship id opened as two sheets on one part. | Saving wrote the part twice, so the saved file had a duplicate zip entry that no program can read. Two sheets on one part are now a damaged file. |
+| `xlsx-part` and `zip-raw` (2026-11-25) | `RemoveActiveContent` kept only the parts the package root led to, but the reader also finds `xl/workbook.xml` when `_rels/.rels` is missing or empty. | The shared strings were left out, and the saved file was **damaged**. The search now starts from the workbook part too. |
 | `zip-raw` | A central directory record with a name length of 0 opened. | Saving failed with `ArgumentException`, since an entry cannot be written without a name. Such a file is now damaged when it is opened. |
 | `formula-shift` | The lexer did not accept `Sheet!#REF!`, which Excel itself writes and which the shifter writes when a reference ends up off the sheet. | A shared formula moved off the sheet no longer parsed. |
 | `roundtrip` | A lone `\r` in text was written as it was. Every XML reader turns it into `\n`. | The text changed silently. It is now written as `_x000D_`, as Excel does. |

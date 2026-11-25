@@ -140,7 +140,7 @@ internal static class DocumentLoader
 
             if (int.TryParse(xml.GetAttribute("localSheetId"), NumberStyles.None, CultureInfo.InvariantCulture, out int sheetIndex) == true)
             {
-                scope = sheetIndex;
+                scope = ScopeOf(reader, sheetIndex);
             }
 
             string formula = await xml.ReadElementContentAsStringAsync();
@@ -150,6 +150,28 @@ internal static class DocumentLoader
                 book.DefinedNames.Add(new Formulas.DefinedName(name, scope, formula));
             }
         }
+    }
+
+    /// <summary>
+    /// The worksheet a name belongs to. localSheetId counts every sheet in the sheet list, macro
+    /// and chart sheets too, and the model only holds the worksheets. A name of another kind of
+    /// sheet gets -2, which no formula looks up.
+    /// </summary>
+    private static int ScopeOf(XlsxReader reader, int localSheetId)
+    {
+        if (localSheetId >= reader.DeclaredSheets.Count)
+        {
+            return localSheetId;
+        }
+
+        int worksheet = reader.DeclaredSheets[localSheetId].WorksheetIndex;
+
+        if (worksheet < 0)
+        {
+            return -2;
+        }
+
+        return worksheet;
     }
 
     private static async Task<Worksheet> LoadSheetAsync(Workbook book, SheetPart part, ZipArchiveEntry entry, XlsxReader reader, CellBudget budget, CancellationToken cancellationToken)
