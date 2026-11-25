@@ -15,6 +15,7 @@ public sealed class Worksheet
     private int frozenColumns;
     private bool autoFilter;
     private SheetVisibility visibility;
+    private SheetView view = SheetView.Default;
 
     internal Worksheet(Workbook workbook, string name, int index, SheetSource? source)
     {
@@ -31,6 +32,7 @@ public sealed class Worksheet
             frozenColumns = source.FrozenColumns;
             autoFilter = source.AutoFilter;
             visibility = source.Visibility;
+            view = source.View;
         }
     }
 
@@ -449,6 +451,167 @@ public sealed class Worksheet
         return AddPicture(picture, range.First);
     }
 
+    /// <summary>
+    /// How the sheet looks in Excel: gridlines, headers, zoom, tab colour, selected cell and
+    /// direction. An opened file's view is read into it; setting it rewrites only what changed.
+    /// </summary>
+    public SheetView View
+    {
+        get => view;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+
+            if (string.Equals(view.TabColor, value.TabColor, StringComparison.Ordinal) == false)
+            {
+                TabColorChanged = true;
+            }
+
+            if ((view with { TabColor = null }).Equals(value with { TabColor = null }) == false)
+            {
+                ViewChanged = true;
+            }
+
+            view = value;
+            Workbook.MarkChanged();
+        }
+    }
+
+    /// <summary>Adds a chart at a place on the sheet, which stays put when rows and columns change size.</summary>
+    /// <param name="chart">The chart.</param>
+    /// <param name="bounds">The place, for example <c>DrawingBounds.FromPoints(20, 20, 360, 220)</c>.</param>
+    /// <returns>As <see cref="AddChart(Chart, CellRange)"/>.</returns>
+    public Result AddChart(Chart chart, DrawingBounds bounds)
+    {
+        ArgumentNullException.ThrowIfNull(chart);
+
+        if (CheckDrawable().IsFailure(out string? error, out ResultStatus status) == true)
+        {
+            return Result.Failure(error, status);
+        }
+
+        Result added = extras.AddChart(chart, DrawingAnchor.At(bounds), Name, name => Workbook.Sheet(name).IsSuccess(out _) == true);
+
+        if (added.IsSuccess(out _, out _) == true)
+        {
+            Workbook.MarkChanged();
+        }
+
+        return added;
+    }
+
+    /// <summary>Puts a picture at a place on the sheet, stretched to fill it.</summary>
+    /// <param name="picture">The picture.</param>
+    /// <param name="bounds">The place.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddPicture(Picture picture, DrawingBounds bounds)
+    {
+        ArgumentNullException.ThrowIfNull(picture);
+
+        return AddDrawing(() => extras.AddPicture(picture, bounds));
+    }
+
+    /// <summary>Adds a shape over a block of cells; it stretches when they change size.</summary>
+    /// <param name="shape">The shape.</param>
+    /// <param name="area">The cells.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddShape(Shape shape, CellRange area)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+
+        return AddDrawing(() => extras.AddShape(shape, DrawingAnchor.Over(area)));
+    }
+
+    /// <summary>Adds a shape over a block of cells given in A1 notation, such as <c>B2:D6</c>.</summary>
+    /// <param name="shape">The shape.</param>
+    /// <param name="area">The cells.</param>
+    /// <returns>As <see cref="AddShape(Shape, CellRange)"/>.</returns>
+    public Result AddShape(Shape shape, string area)
+    {
+        return AddShape(shape, SheetWriter.ParseRange(area));
+    }
+
+    /// <summary>Adds a shape at a place on the sheet, which stays put when rows and columns change size.</summary>
+    /// <param name="shape">The shape.</param>
+    /// <param name="bounds">The place, for example <c>DrawingBounds.FromPoints(20, 20, 160, 90)</c>.</param>
+    /// <returns>As <see cref="AddShape(Shape, CellRange)"/>.</returns>
+    public Result AddShape(Shape shape, DrawingBounds bounds)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+
+        return AddDrawing(() => extras.AddShape(shape, DrawingAnchor.At(bounds)));
+    }
+
+    /// <summary>Adds a group of shapes and pictures over a block of cells, scaled to fill it.</summary>
+    /// <param name="group">The group.</param>
+    /// <param name="area">The cells.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add drawings to.</returns>
+    public Result AddGroup(ShapeGroup group, CellRange area)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+
+        return AddDrawing(() => extras.AddGroup(group, DrawingAnchor.Over(area)));
+    }
+
+    /// <summary>Adds a group of shapes and pictures over a block of cells given in A1 notation.</summary>
+    /// <param name="group">The group.</param>
+    /// <param name="area">The cells.</param>
+    /// <returns>As <see cref="AddGroup(ShapeGroup, CellRange)"/>.</returns>
+    public Result AddGroup(ShapeGroup group, string area)
+    {
+        return AddGroup(group, SheetWriter.ParseRange(area));
+    }
+
+    /// <summary>Adds a group of shapes and pictures at a place on the sheet, scaled to fill it.</summary>
+    /// <param name="group">The group.</param>
+    /// <param name="bounds">The place.</param>
+    /// <returns>As <see cref="AddGroup(ShapeGroup, CellRange)"/>.</returns>
+    public Result AddGroup(ShapeGroup group, DrawingBounds bounds)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+
+        return AddDrawing(() => extras.AddGroup(group, DrawingAnchor.At(bounds)));
+    }
+
+    /// <summary>
+    /// Makes a cell a link to another cell in the workbook or to a web address. The cell keeps its
+    /// value and style. The file's own links are kept, except one on the same cell, which this
+    /// replaces.
+    /// </summary>
+    /// <param name="cell">The cell.</param>
+    /// <param name="link">Where a click goes.</param>
+    /// <returns>Success, or Invalid when the file is Strict OOXML, which the package does not add links to.</returns>
+    public Result AddHyperlink(CellAddress cell, Hyperlink link)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+
+        return AddDrawing(() => extras.AddHyperlink(cell, link));
+    }
+
+    /// <summary>Makes a cell given in A1 notation, such as <c>B2</c>, a link.</summary>
+    /// <param name="cell">The cell.</param>
+    /// <param name="link">Where a click goes.</param>
+    /// <returns>As <see cref="AddHyperlink(CellAddress, Hyperlink)"/>.</returns>
+    public Result AddHyperlink(string cell, Hyperlink link)
+    {
+        return AddHyperlink(ParseAddress(cell), link);
+    }
+
+    internal bool TabColorChanged { get; private set; }
+
+    private Result AddDrawing(Action add)
+    {
+        Result drawable = CheckDrawable();
+
+        if (drawable.IsSuccess(out _, out _) == true)
+        {
+            add();
+            Workbook.MarkChanged();
+        }
+
+        return drawable;
+    }
+
     internal SheetExtras Extras => extras;
 
     /// <summary>
@@ -623,4 +786,8 @@ internal sealed record SheetSource(
     int FrozenColumns,
     bool AutoFilter,
     SheetVisibility Visibility,
-    bool TabSelected);
+    bool TabSelected)
+{
+    /// <summary>The view read from the first sheetView and the tab colour from sheetPr.</summary>
+    public SheetView View { get; init; } = SheetView.Default;
+}

@@ -35,8 +35,9 @@ internal sealed class DrawingPackage
     public async Task<string> WriteDrawingAsync(IReadOnlyList<DrawingItem> items, CancellationToken cancellationToken)
     {
         string drawingPath = Unused("xl/drawings/drawing", ".xml");
-        (List<string> ids, List<(string Id, string Type, string Target)> relationships) = await WriteTargetsAsync(items, [], cancellationToken);
-        await WritePartAsync(drawingPath, xml => DrawingXml.WriteDrawingAsync(xml, items, ids, 2), cancellationToken);
+        DrawingContext context = new([], 2);
+        await WritePartAsync(drawingPath, xml => DrawingXml.WriteDrawingAsync(xml, items, context), cancellationToken);
+        List<PartRelationship> relationships = await WriteTargetsAsync(context, cancellationToken);
         await WritePartAsync(Ooxml.RelationshipsPath(drawingPath), xml => DrawingXml.WriteRelationshipsAsync(xml, relationships), cancellationToken);
         Overrides.Add(("/" + drawingPath, DrawingXml.DrawingContentType));
 
@@ -66,7 +67,7 @@ internal sealed class DrawingPackage
             throw new InvalidDataException($"{KalkylError.DamagedPrefix}: the drawing {drawingPath} is not valid XML ({exception.Message}), so nothing can be added to it.", exception);
         }
 
-        (List<string> ids, List<(string Id, string Type, string Target)> relationships) = await WriteTargetsAsync(items, usedIds, cancellationToken);
+        DrawingContext context = new(usedIds, firstShapeId);
 
         await WritePartAsync(drawingPath, async xml =>
         {
@@ -103,10 +104,12 @@ internal sealed class DrawingPackage
                 }
             }
 
-            await DrawingXml.WriteAnchorsAsync(xml, items, ids, firstShapeId);
+            await DrawingXml.WriteAnchorsAsync(xml, items, context);
             await xml.WriteEndElementAsync();
             await xml.WriteEndDocumentAsync();
         }, cancellationToken);
+
+        List<PartRelationship> relationships = await WriteTargetsAsync(context, cancellationToken);
 
         await WritePartAsync(relsPath, async xml =>
         {
@@ -174,43 +177,62 @@ internal sealed class DrawingPackage
         return id;
     }
 
-    /// <summary>Writes the chart parts and images and returns, per item, the id the drawing refers to it by.</summary>
-    private async Task<(List<string> Ids, List<(string Id, string Type, string Target)> Relationships)> WriteTargetsAsync(IReadOnlyList<DrawingItem> items, HashSet<string> usedIds, CancellationToken cancellationToken)
+    /// <summary>Writes the chart parts and images a drawing refers to, and returns the drawing's relationships to them and to its links.</summary>
+    private async Task<List<PartRelationship>> WriteTargetsAsync(DrawingContext context, CancellationToken cancellationToken)
     {
-        List<string> ids = [];
-        List<(string Id, string Type, string Target)> relationships = [];
+        List<PartRelationship> relationships = [];
 
-        foreach (DrawingItem item in items)
+        foreach (DrawingTarget target in context.Targets)
         {
-            string id = NextId(usedIds);
-            ids.Add(id);
-
-            if (item.Chart is not null)
+            if (target.Chart is not null)
             {
                 string chartPath = Unused("xl/charts/chart", ".xml");
-                await WritePartAsync(chartPath, xml => DrawingXml.WriteChartAsync(xml, item), cancellationToken);
-                relationships.Add((id, DrawingXml.ChartRelationship, "/" + chartPath));
+                await WritePartAsync(chartPath, xml => ChartXml.WriteChartAsync(xml, target.Chart), cancellationToken);
+                relationships.Add(new PartRelationship(target.Id, DrawingXml.ChartRelationship, "/" + chartPath));
                 Overrides.Add(("/" + chartPath, DrawingXml.ChartContentType));
 
                 continue;
             }
 
-            Picture picture = item.Picture!;
+            if (target.Link is Hyperlink link)
+            {
+                if (link.IsExternal == true)
+                {
+                    relationships.Add(new PartRelationship(target.Id, DrawingXml.HyperlinkRelationship, link.Url!, true));
+                }
+                else
+                {
+                    // A link inside the workbook is a fragment, as Excel writes it, not a part.
+                    relationships.Add(new PartRelationship(target.Id, DrawingXml.HyperlinkRelationship, "#" + link.Location));
+                }
+
+                continue;
+            }
+
+            Picture picture = target.Image!;
             string imagePath = Unused("xl/media/image", "." + picture.Extension);
 
             // Images are compressed already; deflating them again costs time and saves nothing.
-            ZipArchiveEntry entry = archive.CreateEntry(imagePath, CompressionLevel.NoCompression);
+            // An SVG is text and does shrink.
+            CompressionLevel level = CompressionLevel.NoCompression;
+
+            if (picture.Format == PictureFormat.Svg)
+            {
+                level = CompressionLevel.Optimal;
+            }
+
+            ZipArchiveEntry entry = archive.CreateEntry(imagePath, level);
 
             await using (Stream entryStream = await entry.OpenAsync(cancellationToken))
             {
                 await entryStream.WriteAsync(picture.Data, cancellationToken);
             }
 
-            relationships.Add((id, DrawingXml.ImageRelationship, "/" + imagePath));
+            relationships.Add(new PartRelationship(target.Id, DrawingXml.ImageRelationship, "/" + imagePath));
             ImageTypes[picture.Extension] = picture.ContentType;
         }
 
-        return (ids, relationships);
+        return relationships;
     }
 
     /// <summary>The highest cNvPr id in a drawing: shape ids must be unique within it.</summary>

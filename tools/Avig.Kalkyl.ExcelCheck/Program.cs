@@ -55,6 +55,7 @@ internal static class Program
         await WriteChartsWithDocumentAsync(Path.Combine(output, "11-charts-document.xlsx"));
         await AddToCompatibilityFilesAsync(output);
         await WriteActiveContentRemovedAsync(Path.Combine(output, "13-active-content-removed.xlsx"));
+        await WriteDashboardAsync(Path.Combine(output, "14-dashboard-document.xlsx"), Path.Combine(output, "15-dashboard-writer.xlsx"));
         await File.WriteAllLinesAsync(Path.Combine(output, "expected.txt"), Expected);
         Console.WriteLine($"Files in {output}. Open each in Excel and follow docs/excel-checklista.md; expected.txt has the values to compare.");
 
@@ -352,6 +353,23 @@ internal static class Program
     /// DDE link, a linked picture, a query table on a connection and a Power Query query), saved
     /// after RemoveActiveContent. Only the cleaned file is written.
     /// </summary>
+    /// <summary>The dashboard the tests build, from the document model and from the streaming writer.</summary>
+    private static async Task WriteDashboardAsync(string documentPath, string writerPath)
+    {
+        Workbook book = Avig.Kalkyl.Tests.DashboardWorkbook.Build();
+        Check((await book.SaveAsync(documentPath)).IsSuccess(out _, out _), documentPath);
+        Result<XlsxWriter> created = await XlsxWriter.CreateAsync(writerPath);
+        Check(created.IsSuccess(out XlsxWriter? writer), created.Error);
+
+        await using (writer)
+        {
+            await Avig.Kalkyl.Tests.DashboardWorkbook.WriteAsync(writer);
+        }
+
+        Expected.Add("14-dashboard-document.xlsx: opens on Dashboard, a dark page without gridlines or row and column headers at 90 % zoom, its tab blue. Left: a navigation column with 'PROJECT DASHBOARD' (DASHBOARD in turquoise), a thin line, and four rounded buttons with an SVG icon each (Projects, Tasks, Budget, Data); a click on a button goes to A1 of that sheet, and each of those sheets has a link back in A3. A round help icon at the bottom links to learn.microsoft.com. Top: four KPI cards with gradients and shadows (24, 780, 62 %, 18), each with a small turquoise up arrow; the last has an inner shadow. Middle: a column chart of tasks per month with August in turquoise, value labels in the columns and the plan as a smooth orange line; beside it a doughnut gauge (72 % turquoise, a thick ring) with '72 %' in the middle. Bottom: a centred funnel of five bars (Leads widest at the top, Won at the bottom) with white labels, and a smooth turquoise line with markers over a blue gradient area. Charts have no border or white background. Data!O1 links to learn.microsoft.com.");
+        Expected.Add("15-dashboard-writer.xlsx: the same dashboard from the streaming writer; it opens on Data, since Data is written first. Must look as 14.");
+    }
+
     private static async Task WriteActiveContentRemovedAsync(string path)
     {
         Avig.Kalkyl.Tests.ActiveWorkbook source = new Avig.Kalkyl.Tests.ActiveWorkbook()

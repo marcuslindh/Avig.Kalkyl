@@ -205,6 +205,8 @@ internal static class DocumentLoader
         int frozenColumns = 0;
         bool autoFilter = false;
         bool tabSelected = false;
+        SheetView view = SheetView.Default;
+        string? tabColor = null;
         List<(int Row, int Column, CellEntry Entry)> cells = [];
         List<(int Row, IReadOnlyList<(string, string, string, string)> Attributes)> rowAttributes = [];
         CellContext context = new(reader.SharedStrings, reader.Styles, reader.Uses1904Dates, part.Info.Name);
@@ -227,8 +229,18 @@ internal static class DocumentLoader
 
                     break;
 
+                case "sheetPr":
+                    if (TryReadTabColor((XElement)await XNode.ReadFromAsync(xml, cancellationToken), out string? rgb) == true)
+                    {
+                        tabColor = rgb;
+                    }
+
+                    break;
+
                 case "sheetViews":
-                    (frozenRows, frozenColumns, tabSelected) = ReadPanes((XElement)await XNode.ReadFromAsync(xml, cancellationToken));
+                    XElement views = (XElement)await XNode.ReadFromAsync(xml, cancellationToken);
+                    (frozenRows, frozenColumns, tabSelected) = ReadPanes(views);
+                    view = ReadView(views);
 
                     break;
 
@@ -250,7 +262,11 @@ internal static class DocumentLoader
             }
         }
 
-        SheetSource source = new(part.Path, part.RelationshipId, part.SheetId, sheetNamespace, columns, frozenRows, frozenColumns, autoFilter, part.Info.Visibility, tabSelected);
+        SheetSource source = new(part.Path, part.RelationshipId, part.SheetId, sheetNamespace, columns, frozenRows, frozenColumns, autoFilter, part.Info.Visibility, tabSelected)
+        {
+            View = view with { TabColor = tabColor },
+        };
+
         Worksheet sheet = new(book, part.Info.Name, part.Info.Index, source);
 
         foreach ((int row, IReadOnlyList<(string, string, string, string)> attributes) in rowAttributes)
@@ -411,6 +427,66 @@ internal static class DocumentLoader
         }
 
         return columns;
+    }
+
+    /// <summary>
+    /// The first view's settings. Values the model cannot hold (a zoom outside 10 to 400, an
+    /// active cell that is not an address) are read as the default.
+    /// </summary>
+    private static SheetView ReadView(XElement views)
+    {
+        XElement? element = views.Elements().FirstOrDefault(candidate => candidate.Name.LocalName == "sheetView");
+
+        if (element is null)
+        {
+            return SheetView.Default;
+        }
+
+        int zoom = 100;
+
+        if (int.TryParse((string?)element.Attribute("zoomScale"), NumberStyles.None, CultureInfo.InvariantCulture, out int scale) == true && scale >= 10 && scale <= 400)
+        {
+            zoom = scale;
+        }
+
+        CellAddress? active = null;
+        XElement? selection = element.Elements().LastOrDefault(candidate => candidate.Name.LocalName == "selection");
+
+        if (selection is not null && CellAddress.TryParse((string?)selection.Attribute("activeCell") ?? string.Empty, out CellAddress cell) == true)
+        {
+            active = cell;
+        }
+
+        return new SheetView
+        {
+            ShowGridLines = IsOff((string?)element.Attribute("showGridLines")) == false,
+            ShowHeaders = IsOff((string?)element.Attribute("showRowColHeaders")) == false,
+            RightToLeft = (string?)element.Attribute("rightToLeft") is "1" or "true",
+            Zoom = zoom,
+            ActiveCell = active,
+        };
+    }
+
+    private static bool IsOff(string? value)
+    {
+        return value is "0" or "false";
+    }
+
+    /// <summary>The tab's colour when sheetPr gives it as RGB; a theme or indexed colour reads as none and is kept in the file.</summary>
+    private static bool TryReadTabColor(XElement properties, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out string? tabColor)
+    {
+        tabColor = null;
+        XElement? color = properties.Elements().FirstOrDefault(candidate => candidate.Name.LocalName == "tabColor");
+        string? rgb = (string?)color?.Attribute("rgb");
+
+        if (rgb is null || (rgb.Length != 8 && rgb.Length != 6) || int.TryParse(rgb, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _) == false)
+        {
+            return false;
+        }
+
+        tabColor = "#" + rgb[^6..].ToUpperInvariant();
+
+        return true;
     }
 
     private static (int Rows, int Columns, bool Selected) ReadPanes(XElement views)
