@@ -69,6 +69,12 @@ internal static class DrawingXml
             {
                 await WriteChartFrameAsync(xml, item.Chart, relationshipIds[index], shapeId);
             }
+            else if (item.Slicer is not null)
+            {
+                // The rectangle older versions show: the area at Excel's default column width and row height.
+                CellRange covered = anchor.Area ?? new CellRange(anchor.From, anchor.From);
+                await PivotXml.WriteSlicerFrameAsync(xml, item.Slicer, shapeId, covered.First.Column * 609600L, covered.First.Row * 190500L, covered.ColumnCount * 609600L, covered.RowCount * 190500L);
+            }
             else
             {
                 await WritePictureAsync(xml, item.Picture!, relationshipIds[index], shapeId, anchor);

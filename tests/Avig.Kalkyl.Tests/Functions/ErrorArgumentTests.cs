@@ -330,11 +330,11 @@ public class ErrorArgumentTests
         "=COUNTA(1,2)",
     ];
 
-    /// <summary>Functions a call of constants cannot test: they need ranges or formulas in cells, or are always an error (NA). The other tests cover them.</summary>
+    /// <summary>Functions a call of constants cannot test: they need ranges, formulas in cells or a pivot table, or are always an error (NA). The other tests cover them.</summary>
     private static readonly HashSet<string> Uncalled =
     [
         "AVERAGEIF", "AVERAGEIFS", "COLUMN", "COUNTBLANK", "COUNTIF", "COUNTIFS", "MAXIFS", "MINIFS", "OFFSET", "SUBTOTAL", "SUMIF", "SUMIFS",
-        "AREAS", "FORMULATEXT", "ISFORMULA", "NA",
+        "AREAS", "FORMULATEXT", "ISFORMULA", "NA", "GETPIVOTDATA",
         "DAVERAGE", "DCOUNT", "DCOUNTA", "DGET", "DMAX", "DMIN", "DPRODUCT", "DSTDEV", "DSTDEVP", "DSUM", "DVAR", "DVARP",
     ];
 

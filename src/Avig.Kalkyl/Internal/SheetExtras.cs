@@ -50,7 +50,11 @@ internal readonly record struct SheetReference(string? Sheet, CellRange Range)
 internal readonly record struct DrawingAnchor(CellAddress From, CellRange? Area, long Width, long Height);
 
 /// <summary>A chart or a picture on a sheet, with the series references already resolved to formulas.</summary>
-internal sealed record DrawingItem(Chart? Chart, IReadOnlyList<ResolvedSeries> Series, Picture? Picture, DrawingAnchor Anchor);
+internal sealed record DrawingItem(Chart? Chart, IReadOnlyList<ResolvedSeries> Series, Picture? Picture, DrawingAnchor Anchor)
+{
+    /// <summary>The name of the slicer the anchor holds, when it holds one rather than a chart or a picture.</summary>
+    public string? Slicer { get; init; }
+}
 
 internal sealed record ResolvedSeries(ChartSeries Series, string Values, string? Categories);
 
@@ -113,6 +117,12 @@ internal sealed class SheetExtras
         drawings.Add(new DrawingItem(chart, resolved, null, new DrawingAnchor(area.First, area, 0, 0)));
 
         return Result.Success();
+    }
+
+    /// <summary>Adds the anchor of a slicer; the slicer itself is written with the pivot tables.</summary>
+    public void AddSlicer(string name, CellRange area)
+    {
+        drawings.Add(new DrawingItem(null, [], null, new DrawingAnchor(area.First, area, 0, 0)) { Slicer = name });
     }
 
     public void AddPicture(Picture picture, CellRange area)

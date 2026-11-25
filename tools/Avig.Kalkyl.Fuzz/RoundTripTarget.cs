@@ -10,7 +10,8 @@ namespace Avig.Kalkyl.Fuzz;
 /// a lone \r folded away by the XML reader, a number written with too few digits. Nothing
 /// throws, the file opens, and the value is different. The input is a list of cells decoded
 /// from bytes; each is written with <see cref="XlsxWriter"/> and with the document model, and
-/// read back with <see cref="XlsxReader"/> and <see cref="Workbook"/>.
+/// read back with <see cref="XlsxReader"/> and <see cref="Workbook"/>. The same cells are then
+/// the source of a pivot table, which must save, open again and count them.
 /// </summary>
 internal static class RoundTripTarget
 {
@@ -154,6 +155,7 @@ internal static class RoundTripTarget
 
         await StreamingAsync(values);
         await DocumentAsync(values);
+        await PivotAsync(values);
     }
 
     private static async Task StreamingAsync(List<CellValue> values)
@@ -227,6 +229,95 @@ internal static class RoundTripTarget
         for (int index = 0; index < values.Count; index++)
         {
             Compare("document -> document", index, values[index], again.Sheets[0][index / Columns, index % Columns].Value);
+        }
+    }
+
+    /// <summary>
+    /// The values as the source of a pivot table, the first row as headings: adding it gives a
+    /// result, not an exception; the saved file opens with the pivot table and a cache of every
+    /// row; and GETPIVOTDATA's grand total is the number of values in the counted column.
+    /// </summary>
+    private static async Task PivotAsync(List<CellValue> values)
+    {
+        if (values.Count < Columns + 1)
+        {
+            return;
+        }
+
+        int rows = (values.Count + Columns - 1) / Columns;
+        string rowField = values[0].ToString().Trim();
+        string countField = values[1].ToString().Trim();
+
+        if (rows < 2 || rowField.Length == 0 || countField.Length == 0 || string.Equals(rowField, countField, StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return;
+        }
+
+        Workbook book = Workbook.Create();
+        book.AddSheet("Values").IsSuccess(out Worksheet? sheet);
+        book.AddSheet("Pivot").IsSuccess(out Worksheet? pivots);
+
+        for (int index = 0; index < values.Count; index++)
+        {
+            sheet!.SetValue(index / Columns, index % Columns, values[index]);
+        }
+
+        PivotTable table = new("Fuzz", "Values!A1:F" + rows.ToString(CultureInfo.InvariantCulture))
+        {
+            Rows = [rowField],
+            Values = [new PivotValue(countField, PivotAggregation.Count) { Name = "Counted" }],
+        };
+
+        Result added = pivots!.AddPivotTable(table, "A1");
+
+        if (added.IsSuccess(out _, out _) == false)
+        {
+            if (added.Status is not (ResultStatus.Invalid or ResultStatus.NotFound or ResultStatus.Conflict))
+            {
+                throw new InvariantViolationException($"AddPivotTable gave {added.Status}: {added.Error}");
+            }
+
+            return;
+        }
+
+        // Rows of empty cells at the bottom are not in the source: the range ends at the last used row.
+        int used = Math.Min(rows, sheet!.RowCount);
+        int counted = 0;
+
+        for (int row = 1; row < used; row++)
+        {
+            if (sheet[row, 1].Value.IsEmpty == false)
+            {
+                counted++;
+            }
+        }
+
+        await using MemoryStream file = new();
+        await book.SaveAsync(file);
+        file.Position = 0;
+        Result<Workbook> opened = await Workbook.OpenAsync(file);
+
+        if (opened.IsSuccess(out Workbook? again) == false)
+        {
+            throw new InvariantViolationException($"A saved workbook with a pivot table cannot be opened: {opened.Error}");
+        }
+
+        if (again.PivotTables.Count != 1 || again.PivotCaches.Count != 1 || again.PivotCaches[0].RecordCount != used - 1)
+        {
+            throw new InvariantViolationException($"The saved pivot table came back as {again.PivotTables.Count} tables and {again.PivotCaches.Count} caches, for {used - 1} rows.");
+        }
+
+        again.Evaluate("GETPIVOTDATA(\"Counted\",Pivot!A1)").IsSuccess(out CellValue total);
+        CellValue expected = CellValue.Number(counted);
+
+        if (counted == 0)
+        {
+            expected = CellValue.Error("#REF!");
+        }
+
+        if (total != expected)
+        {
+            throw new InvariantViolationException($"GETPIVOTDATA gave {Describe(total)} for {counted} values in column B.");
         }
     }
 

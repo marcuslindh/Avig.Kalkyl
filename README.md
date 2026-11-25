@@ -7,11 +7,12 @@ Read, write, edit and calculate Excel `.xlsx` files in .NET. Three ways in, one 
 - **Streaming** — `XlsxReader` and `XlsxWriter` read and write a row at a time with flat memory
   use, however large the file.
 - **Document** — `Workbook` opens a file, lets you change any cell, recalculates formulas with a
-  built-in engine of 300+ functions, and saves it with everything it does not understand (pivot
-  tables, comments, macros, other programs' extensions) left as it was.
+  built-in engine of 300+ functions, and saves it with everything it does not understand
+  (comments, macros, other programs' extensions) left as it was.
 
 Charts, pictures and conditional formatting can be added with the streaming writer and the
-document model, also to files that already have their own. Expected failures come back as
+document model, also to files that already have their own; pivot tables and slicers with the
+document model. Expected failures come back as
 [Avig.Result](https://www.nuget.org/packages/Avig.Result) values instead of exceptions. No
 dependencies besides Avig.Result. Safe for trimming and Native AOT.
 
@@ -889,6 +890,106 @@ without loading the sheets. `RemoveActiveContent` returns `Invalid`, and changes
 taking something out would break the workbook: a pivot table or a data model (Power Pivot) that
 gets its data from a connection, or a chart drawn from another workbook.
 
+## 23. Pivot tables and slicers
+
+`AddPivotTable` puts a pivot table on a sheet, over a range with headings in its first row (on
+any sheet) or over an Excel table of an opened file: row, column and filter fields, value fields
+with Sum, Count, Average, Min or Max and a number format, the compact, outline or tabular layout,
+grand totals and a built-in style. The package works the table out as Excel does and writes it
+into the sheet's cells, so formulas, GETPIVOTDATA and charts read it before Excel has seen the
+file; it also writes the pivot cache with a copy of the source data, and marks it to be
+refreshed when Excel opens the file. `AddSlicer` adds a slicer for a field, connected to one or
+more pivot tables on the same source, with the items it selects; the tables show only those. The
+pivot tables are rendered again from their sources by `RecalculateAsync` and by `SaveAsync`.
+
+<!-- example: pivot-tables -->
+```csharp
+Result<Workbook> opened = await Workbook.OpenAsync("sales.xlsx");   // Data!A1:F49: Year, Month, Region, Product, Sales, Units
+
+if (opened.IsFailure(out string? error, out _, out Workbook? book) == true
+    || book.AddSheet("Pivots").IsSuccess(out Worksheet? pivots) == false
+    || book.AddSheet("Dashboard").IsSuccess(out Worksheet? dashboard) == false)
+{
+    return;
+}
+
+// Rows, columns, values and filters, as in Excel's PivotTable Fields pane.
+PivotTable byMonth = new("SalesByMonth", "Data!A1:F49")
+{
+    Rows = ["Month"],
+    Values = [new PivotValue("Sales") { NumberFormat = "#,##0" }, new PivotValue("Units", PivotAggregation.Average)],
+};
+
+PivotTable byRegion = new("SalesByRegion", "Data!A1:F49")
+{
+    Rows = ["Region"],
+    Columns = ["Year"],
+    Filters = ["Product"],
+    Values = [new PivotValue("Sales", PivotAggregation.Max) { Name = "Best month" }],
+    Layout = PivotLayout.Tabular,
+    GrandTotalColumn = false,
+    Style = "PivotStyleMedium9",
+};
+
+Result added = pivots.AddPivotTable(byMonth, "A3");     // Conflict for a name taken, NotFound for a field the source lacks
+pivots.AddPivotTable(byRegion, "F3");                  // the Filters area in F3, the table from F5
+
+// A slicer filters the pivot tables it names; Excel shows the buttons and the tables follow a click.
+Slicer years = new("Year", ["SalesByMonth", "SalesByRegion"]) { Columns = 2, Selected = ["2026"] };
+
+dashboard.AddSlicer(years, "A1:D4");
+dashboard.AddSlicer(new Slicer("Month", ["SalesByMonth", "SalesByRegion"]) { Columns = 6, ShowCaption = false, Style = "SlicerStyleDark1" }, "E1:M4");
+
+// The pivot tables are in the cells, so formulas and charts read them as Excel's would.
+dashboard["A6"] = "Sales in January 2026";
+dashboard["B6"] = Cell.FromFormula("GETPIVOTDATA(\"Sum of Sales\",Pivots!$A$3,\"Month\",\"Jan\")");
+dashboard.AddChart(new Chart(ChartType.Column) { Title = "Sales 2026", Series = [new ChartSeries("Sales", "Pivots!B4:B15", "Pivots!A4:A15")] }, "A8:H24");
+
+await book.RecalculateAsync();
+Console.WriteLine(dashboard["B6"].Value);              // 3275
+await book.SaveAsync("dashboard.xlsx");
+```
+
+The captions are Excel's English ones (Row Labels, Grand Total); Excel puts its own language's in
+when it refreshes. Month and day names sort in calendar order, as Excel's custom lists sort them.
+GETPIVOTDATA also reads the pivot tables a file had when it was opened, from their cells. Pivot
+tables are for the document model only: the streaming writer has written the source rows before
+a pivot table could be worked out.
+
+A workbook made in Excel as a template keeps its pivot tables, slicers and pivot caches as they
+were. `PivotTables` and `PivotCaches` list them, and `RefreshPivotTablesOnOpen` makes Excel
+refresh every cache from its source when it opens the saved file, so the tables show the data the
+package put in:
+
+<!-- example: pivot-template -->
+```csharp
+Result<Workbook> opened = await Workbook.OpenAsync("template.xlsx");
+
+if (opened.IsFailure(out string? error, out _, out Workbook? book) == true || book.Sheet("Data").IsSuccess(out Worksheet? data) == false)
+{
+    return;
+}
+
+foreach (PivotTableInfo table in book.PivotTables)
+{
+    Console.WriteLine($"{table.Name} on {table.Sheet}, {table.Location}");   // SalesByMonth on Pivots, A3:B16
+}
+
+foreach (PivotCacheInfo cache in book.PivotCaches)
+{
+    Console.WriteLine($"{cache.Source}: {cache.RecordCount} rows, {string.Join(", ", cache.Fields)}");
+}
+
+data.SetValue(1, 4, 125_000);                   // new figures in the source
+book.RefreshPivotTablesOnOpen = true;           // Excel refreshes every pivot cache when it opens the file
+await book.SaveAsync("dashboard-2027.xlsx");
+```
+
+A slicer filters only pivot tables added with `AddPivotTable`, and a new pivot table gets a cache
+of its own rather than sharing one the file has. A pivot table on a data connection or the data
+model (Power Pivot), calculated fields and items, grouping of dates and numbers, sorting by value,
+the Values field on rows, and timelines are not supported; files that have them keep them.
+
 ## The API at a glance
 
 | Type | What it is | Scenario |
@@ -913,14 +1014,17 @@ gets its data from a connection, or a chart drawn from another workbook.
 | `ConditionalFormat`, `ComparisonOperator`, `IconSetKind` | `AddConditionalFormat` on both writers. Comparisons `Equal`, `NotEqual`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual`; 17 icon sets from `ThreeArrows` to `FiveQuarters`. | 17 |
 | `Workbook.HasMacros`, `RemoveMacros` | Find and drop a VBA project. | 18 |
 | `ActiveContent`, `Workbook.ActiveContent`, `ExternalReferences`, `RemoveActiveContent` | What can act on its own (`Macros`, `ActiveX`, `EmbeddedObjects`, `ExternalReferences`, `DataConnections`), the external links as `OpcExternalRelationship` (`SourcePart`, `Kind`, `Target`), and a save without any of it. `XlsxReader.GetActiveContentAsync` and `GetExternalReferencesAsync` on the streaming reader. | 19 |
+| `PivotTable`, `PivotValue`, `PivotAggregation`, `PivotLayout` | `Worksheet.AddPivotTable(table, topLeft)`: `Rows`, `Columns`, `Filters`, `Values` (`Sum`, `Count`, `Average`, `Min`, `Max`, with `Name` and `NumberFormat`), `Layout` (`Compact`, `Outline`, `Tabular`), `GrandTotalRow`, `GrandTotalColumn`, `Style`. Document model only. | 23 |
+| `Slicer` | `Worksheet.AddSlicer(slicer, area)`: `Field`, `PivotTables`, `Selected`, `Caption`, `ShowCaption`, `Style`, `Columns`, `ItemHeight`, `Name`. | 23 |
+| `PivotTableInfo`, `PivotCacheInfo` | `Workbook.PivotTables` and `PivotCaches`: what the workbook has (`Name`, `Sheet`, `Location`, `CacheId`; `Source`, `Fields`, `RecordCount`, `RefreshOnLoad`); `RefreshPivotTablesOnOpen`. | 23 |
 
 ## What goes wrong, and how you hear about it
 
 | Situation | You get |
 | --- | --- |
-| File or folder missing, sheet not found, a chart series on a sheet that does not exist | `NotFound` |
+| File or folder missing, sheet not found, a chart series on a sheet that does not exist, a pivot field, table or slicer item that does not exist | `NotFound` |
 | No permission | `Forbidden` |
-| File locked by another program, sheet name taken | `Conflict` |
+| File locked by another program, sheet name taken, a pivot table name taken or a pivot table over another | `Conflict` |
 | Not an .xlsx, an old .xls, password-protected, damaged, bad sheet name, bad cell when mapping, a picture that is not PNG, JPEG or GIF | `Invalid` |
 | A sheet damaged half-way through a stream, a drawing damaged when something is added to it | `InvalidDataException` |
 | Calling something in the wrong order, values Excel cannot store, a rule style Excel does not allow | `InvalidOperationException`, `ArgumentException` |

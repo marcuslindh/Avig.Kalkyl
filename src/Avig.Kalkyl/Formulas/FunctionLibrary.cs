@@ -59,6 +59,7 @@ internal static class FunctionLibrary
         FinancialFunctions.Register(table);
         EngineeringFunctions.Register(table);
         DatabaseFunctions.Register(table);
+        PivotFunctions.Register(table);
 
         return table.Functions;
     }

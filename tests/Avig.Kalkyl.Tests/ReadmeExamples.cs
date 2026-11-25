@@ -805,6 +805,108 @@ public sealed class ReadmeExamples : IDisposable
     }
 
     [Fact]
+    public async Task Pivot_tables_and_slicers()
+    {
+        await CreateSalesAsync("sales.xlsx");
+
+        #region example: pivot-tables
+        Result<Workbook> opened = await Workbook.OpenAsync("sales.xlsx");   // Data!A1:F49: Year, Month, Region, Product, Sales, Units
+
+        if (opened.IsFailure(out string? error, out _, out Workbook? book) == true
+            || book.AddSheet("Pivots").IsSuccess(out Worksheet? pivots) == false
+            || book.AddSheet("Dashboard").IsSuccess(out Worksheet? dashboard) == false)
+        {
+            return;
+        }
+
+        // Rows, columns, values and filters, as in Excel's PivotTable Fields pane.
+        PivotTable byMonth = new("SalesByMonth", "Data!A1:F49")
+        {
+            Rows = ["Month"],
+            Values = [new PivotValue("Sales") { NumberFormat = "#,##0" }, new PivotValue("Units", PivotAggregation.Average)],
+        };
+
+        PivotTable byRegion = new("SalesByRegion", "Data!A1:F49")
+        {
+            Rows = ["Region"],
+            Columns = ["Year"],
+            Filters = ["Product"],
+            Values = [new PivotValue("Sales", PivotAggregation.Max) { Name = "Best month" }],
+            Layout = PivotLayout.Tabular,
+            GrandTotalColumn = false,
+            Style = "PivotStyleMedium9",
+        };
+
+        Result added = pivots.AddPivotTable(byMonth, "A3");     // Conflict for a name taken, NotFound for a field the source lacks
+        pivots.AddPivotTable(byRegion, "F3");                  // the Filters area in F3, the table from F5
+
+        // A slicer filters the pivot tables it names; Excel shows the buttons and the tables follow a click.
+        Slicer years = new("Year", ["SalesByMonth", "SalesByRegion"]) { Columns = 2, Selected = ["2026"] };
+
+        dashboard.AddSlicer(years, "A1:D4");
+        dashboard.AddSlicer(new Slicer("Month", ["SalesByMonth", "SalesByRegion"]) { Columns = 6, ShowCaption = false, Style = "SlicerStyleDark1" }, "E1:M4");
+
+        // The pivot tables are in the cells, so formulas and charts read them as Excel's would.
+        dashboard["A6"] = "Sales in January 2026";
+        dashboard["B6"] = Cell.FromFormula("GETPIVOTDATA(\"Sum of Sales\",Pivots!$A$3,\"Month\",\"Jan\")");
+        dashboard.AddChart(new Chart(ChartType.Column) { Title = "Sales 2026", Series = [new ChartSeries("Sales", "Pivots!B4:B15", "Pivots!A4:A15")] }, "A8:H24");
+
+        await book.RecalculateAsync();
+        Console.WriteLine(dashboard["B6"].Value);              // 3275
+        await book.SaveAsync("dashboard.xlsx");
+        #endregion
+
+        Assert.True(added.IsSuccess(out _, out _), added.Error);
+        Assert.Equal((CellValue)3275, dashboard["B6"].Value);
+        Assert.Equal((CellValue)"Grand Total", pivots["A16"].Value);
+        Assert.Equal((CellValue)"Product", pivots["F3"].Value);
+        await using FileStream file = File.OpenRead("dashboard.xlsx");
+        MemoryStream copy = new();
+        await file.CopyToAsync(copy);
+        Assert.Empty(TestFiles.Validate(copy));
+    }
+
+    [Fact]
+    public async Task Pivot_tables_of_a_template()
+    {
+        await CreateSalesAsync("sales.xlsx");
+        Assert.True((await Workbook.OpenAsync("sales.xlsx")).IsSuccess(out Workbook? source));
+        Assert.True(source.AddSheet("Pivots").IsSuccess(out Worksheet? sheet));
+        Assert.True(sheet.AddPivotTable(new PivotTable("SalesByMonth", "Data!A1:F49") { Rows = ["Month"], Values = [new PivotValue("Sales")] }, "A3").IsSuccess(out _, out _));
+        Assert.True((await source.SaveAsync("template.xlsx")).IsSuccess(out _, out _));
+
+        #region example: pivot-template
+        Result<Workbook> opened = await Workbook.OpenAsync("template.xlsx");
+
+        if (opened.IsFailure(out string? error, out _, out Workbook? book) == true || book.Sheet("Data").IsSuccess(out Worksheet? data) == false)
+        {
+            return;
+        }
+
+        foreach (PivotTableInfo table in book.PivotTables)
+        {
+            Console.WriteLine($"{table.Name} on {table.Sheet}, {table.Location}");   // SalesByMonth on Pivots, A3:B16
+        }
+
+        foreach (PivotCacheInfo cache in book.PivotCaches)
+        {
+            Console.WriteLine($"{cache.Source}: {cache.RecordCount} rows, {string.Join(", ", cache.Fields)}");
+        }
+
+        data.SetValue(1, 4, 125_000);                   // new figures in the source
+        book.RefreshPivotTablesOnOpen = true;           // Excel refreshes every pivot cache when it opens the file
+        await book.SaveAsync("dashboard-2027.xlsx");
+        #endregion
+
+        Assert.Equal("A3:B16", Assert.Single(book.PivotTables).Location.ToString());
+        Assert.Equal(48, Assert.Single(book.PivotCaches).RecordCount);
+        await using FileStream file = File.OpenRead("dashboard-2027.xlsx");
+        MemoryStream copy = new();
+        await file.CopyToAsync(copy);
+        Assert.Contains("refreshOnLoad=\"1\"", TestFiles.ReadPart(copy, "xl/pivotCache/pivotCacheDefinition1.xml"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Every_README_example_is_code_that_runs_here()
     {
         string source = File.ReadAllText(SourcePath());
@@ -974,6 +1076,42 @@ public sealed class ReadmeExamples : IDisposable
         sheet.SetColumnWidth(0, 14);
         sheet.FreezePanes(1);
         await book.RecalculateAsync();
+        Assert.True((await book.SaveAsync(path)).IsSuccess(out _, out _));
+    }
+
+    /// <summary>Data!A1:F49: Year, Month, Region, Product, Sales and Units for 2025 and 2026, two regions a month.</summary>
+    private static async Task CreateSalesAsync(string path)
+    {
+        Workbook book = Workbook.Create();
+        Assert.True(book.AddSheet("Data").IsSuccess(out Worksheet? sheet));
+        string[] months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        string[] headings = ["Year", "Month", "Region", "Product", "Sales", "Units"];
+        string[] products = ["A", "B"];
+
+        for (int column = 0; column < headings.Length; column++)
+        {
+            sheet[0, column] = headings[column];
+        }
+
+        int row = 1;
+
+        foreach (int year in new[] { 2025, 2026 })
+        {
+            for (int month = 0; month < months.Length; month++)
+            {
+                foreach (string region in new[] { "North", "South" })
+                {
+                    sheet[row, 0] = year;
+                    sheet[row, 1] = months[month];
+                    sheet[row, 2] = region;
+                    sheet[row, 3] = products[row % 2];
+                    sheet[row, 4] = 1000 + (month * 100) + (row * 25);
+                    sheet[row, 5] = 10 + (row % 7);
+                    row++;
+                }
+            }
+        }
+
         Assert.True((await book.SaveAsync(path)).IsSuccess(out _, out _));
     }
 

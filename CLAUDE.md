@@ -90,6 +90,19 @@ vara verifierat genom sabotage (tabellen i README:n).
   blir `dxf`-poster i `StyleRegistry`. Strict OOXML får inga ritningar. Testerna finns i
   `DrawingTests.cs`; Excel-checkfil 10–12 visar dem i riktiga Excel.
 
+- **Pivottabeller och utsnitt** finns bara i dokumentmodellen. `PivotRegistry` (i `Workbook.Pivots`)
+  håller dem som lagts till och dem filen hade (`PivotReader`, bara definitionerna, inte posterna).
+  `PivotRender` räknar ut en tabell som Excel lägger ut den (raderna och kolumnerna, `rowItems` och
+  `colItems`, cellerna) och skriver den i bladets celler när den läggs till, när ett utsnitt läggs
+  till, i `RecalculateAsync` och i `SaveAsync`. `PivotPackage` och `PivotXml` skriver cachen med
+  posterna (`refreshOnLoad="1"`), tabellerna, utsnittscacharna och utsnitten; saveren lägger in
+  `pivotCaches`, `extLst` och namnen `Slicer_…` i workbook.xml och utsnittslistan i bladets
+  `extLst`. Utsnittens ankare är `DrawingItem` med `Slicer`. GETPIVOTDATA (`PivotFunctions`,
+  volatil) läser värdet ur tabellens celler via `PivotGrid`, både för nya tabeller och för filens.
+  Facit är Excel 365 via COM: testerna i `PivotTests.cs` jämför med det Excel sparade för samma
+  data, och ExcelCheck-fil 17–18 är instrumentpanelen. `RefreshPivotTablesOnOpen` sätter
+  `refreshOnLoad` på filens egna cachedefinitioner när de kopieras. Strict OOXML får inga pivottabeller.
+
 ## Versioner
 
 0.x tills alla fem milstolparna är klara; första publika versionen blir 1.0.0. Ett publicerat

@@ -37,6 +37,8 @@ internal static class DocumentSaver
 
     public static async Task SaveAsync(Workbook book, Stream output, CancellationToken cancellationToken)
     {
+        // The pivot tables the package added are written as their sources are now.
+        book.RenderPivotTables();
         await using ZipArchive archive = await ZipArchive.CreateAsync(output, ZipArchiveMode.Create, true, null, cancellationToken);
 
         if (book.Package is null || book.WorkbookPath is null)
@@ -64,29 +66,25 @@ internal static class DocumentSaver
 
         List<NewSheet> parts = [];
         DrawingPackage drawings = new(archive, []);
+        PivotPackage pivots = new(archive, []);
+        await pivots.WriteAsync(book, styles, sheet => sheet.Index + 1, cancellationToken);
 
         foreach (Worksheet sheet in sheets)
         {
             string number = SheetXml.Text(sheet.Index + 1);
             NewSheet part = new(sheet, "xl/worksheets/sheet" + number + ".xml", "worksheets/sheet" + number + ".xml", "rId" + number, sheet.Index + 1);
             parts.Add(part);
-            (bool hasDrawing, string id) = await WriteNewSheetDrawingAsync(archive, drawings, sheet, part.Path, cancellationToken);
-            string? drawingId = null;
-
-            if (hasDrawing == true)
-            {
-                drawingId = id;
-            }
-
-            await WritePartAsync(archive, part.Path, xml => WriteNewSheetAsync(xml, sheet, styles, sheet.Index == 0, false, drawingId), cancellationToken);
+            (_, string? drawingId, string? slicersId) = await WriteNewSheetRelationshipsAsync(archive, drawings, pivots, sheet, part.Path, cancellationToken);
+            await WritePartAsync(archive, part.Path, xml => WriteNewSheetAsync(xml, sheet, styles, sheet.Index == 0, false, drawingId, slicersId), cancellationToken);
         }
 
         await WritePartAsync(archive, "xl/styles.xml", styles.WriteAsync, cancellationToken);
         SheetList sheetList = SheetList.Create(book, new HashSet<string>(StringComparer.Ordinal));
-        await WritePartAsync(archive, "xl/workbook.xml", xml => WriteNewWorkbookAsync(xml, book, parts, sheetList), cancellationToken);
+        List<string> pivotIds = [.. pivots.WorkbookRelationships.Select((_, index) => "rId" + SheetXml.Text(parts.Count + 2 + index))];
+        await WritePartAsync(archive, "xl/workbook.xml", xml => WriteNewWorkbookAsync(xml, book, parts, sheetList, pivots, pivotIds), cancellationToken);
         string stylesId = "rId" + SheetXml.Text(parts.Count + 1);
-        await WritePartAsync(archive, "xl/_rels/workbook.xml.rels", xml => WriteNewWorkbookRelationshipsAsync(xml, parts, stylesId), cancellationToken);
-        await WritePartAsync(archive, "[Content_Types].xml", xml => WriteNewContentTypesAsync(xml, parts, drawings), cancellationToken);
+        await WritePartAsync(archive, "xl/_rels/workbook.xml.rels", xml => WriteNewWorkbookRelationshipsAsync(xml, parts, stylesId, pivots, pivotIds), cancellationToken);
+        await WritePartAsync(archive, "[Content_Types].xml", xml => WriteNewContentTypesAsync(xml, parts, drawings, pivots), cancellationToken);
         await WritePartAsync(archive, "_rels/.rels", WriteRootRelationshipsAsync, cancellationToken);
     }
 
@@ -123,22 +121,28 @@ internal static class DocumentSaver
         bool hasFormulas = book.Sheets.Any(sheet => sheet.RowEntries.Values.Any(row => row.Cells.Values.Any(cell => cell.Cell.Formula is not null)));
         DrawingPackage drawings = new(archive, partPaths) { Removal = removal };
 
+        Dictionary<Worksheet, int> sheetIds = SheetIds(book, original, nextSheetId);
+        PivotPackage pivots = new(archive, partPaths);
+        await pivots.WriteAsync(book, styles, sheet => sheetIds[sheet], cancellationToken);
+
         foreach (Worksheet sheet in book.Sheets)
         {
             if (sheet.Source is SheetSource source && XmlParts.TryFindEntry(original, source.Path, out ZipArchiveEntry? sheetEntry) == true)
             {
                 written.Add(sheetEntry.FullName);
                 string? drawingId = null;
+                string? slicersId = null;
 
-                if (sheet.Extras.Drawings.Count > 0)
+                if (sheet.Extras.Drawings.Count > 0 || pivots.Sheets.ContainsKey(sheet) == true)
                 {
                     string sheetPath = sheetEntry.FullName.Replace('\\', '/');
 
                     // The sheet's .rels and its drawing are read for the first time here.
                     try
                     {
-                        (string? openedId, string[] drawingParts) = await WriteOpenedSheetDrawingAsync(original, archive, drawings, sheetPath, sheet.Extras.Drawings, cancellationToken);
+                        (string? openedId, string? openedSlicersId, string[] drawingParts) = await WriteOpenedSheetDrawingAsync(original, archive, drawings, pivots, sheet, sheetPath, sheet.Extras.Drawings, cancellationToken);
                         drawingId = openedId;
+                        slicersId = openedSlicersId;
                         written.UnionWith(drawingParts);
                     }
                     catch (XmlException exception)
@@ -154,7 +158,7 @@ internal static class DocumentSaver
                     firstPriority = await MaxPriorityAsync(sheetEntry, cancellationToken) + 1;
                 }
 
-                await WritePartAsync(archive, sheetEntry.FullName, xml => WritePatchedSheetAsync(xml, sheetEntry, sheet, styles, book.Uses1904Dates, drawingId, firstPriority, removal, cancellationToken), cancellationToken);
+                await WritePartAsync(archive, sheetEntry.FullName, xml => WritePatchedSheetAsync(xml, sheetEntry, sheet, styles, book.Uses1904Dates, drawingId, slicersId, firstPriority, removal, cancellationToken), cancellationToken);
 
                 continue;
             }
@@ -181,16 +185,14 @@ internal static class DocumentSaver
             nextSheetId++;
             added.Add(part);
             written.Add(part.Path);
-            (bool hasDrawing, string id) = await WriteNewSheetDrawingAsync(archive, drawings, sheet, part.Path, cancellationToken);
-            string? newDrawingId = null;
+            (bool hasRelationships, string? newDrawingId, string? newSlicersId) = await WriteNewSheetRelationshipsAsync(archive, drawings, pivots, sheet, part.Path, cancellationToken);
 
-            if (hasDrawing == true)
+            if (hasRelationships == true)
             {
-                newDrawingId = id;
                 written.Add(Ooxml.RelationshipsPath(part.Path));
             }
 
-            await WritePartAsync(archive, part.Path, xml => WriteNewSheetAsync(xml, sheet, styles, false, book.Uses1904Dates, newDrawingId), cancellationToken);
+            await WritePartAsync(archive, part.Path, xml => WriteNewSheetAsync(xml, sheet, styles, false, book.Uses1904Dates, newDrawingId, newSlicersId), cancellationToken);
         }
 
         string? addedStylesId = null;
@@ -221,10 +223,16 @@ internal static class DocumentSaver
             await WritePartAsync(archive, stylesPath, styles.WriteAsync, cancellationToken);
         }
 
+        if (addedStylesId is not null)
+        {
+            relationshipIds.Add(addedStylesId);
+        }
+
+        List<string> pivotIds = [.. pivots.WorkbookRelationships.Select(_ => DrawingPackage.NextId(relationshipIds))];
         XmlParts.TryFindEntry(original, workbookPath, out ZipArchiveEntry? workbookEntry);
-        await WritePartAsync(archive, workbookPath, xml => WritePatchedWorkbookAsync(xml, workbookEntry!, book, added, hasFormulas, sheetList, removal, cancellationToken), cancellationToken);
-        await WritePartAsync(archive, workbookRelsPath, xml => WritePatchedWorkbookRelationshipsAsync(xml, original, workbookRelsPath, added, addedStylesId, book.DropsVba, removal.RemovedIds(workbookPath), cancellationToken), cancellationToken);
-        await WritePartAsync(archive, "[Content_Types].xml", xml => WritePatchedContentTypesAsync(xml, original, book, workbookPath, added, calcChainPath, addedStylesId is not null, stylesPath, drawings, removal, cancellationToken), cancellationToken);
+        await WritePartAsync(archive, workbookPath, xml => WritePatchedWorkbookAsync(xml, workbookEntry!, book, added, hasFormulas, sheetList, removal, pivots, pivotIds, cancellationToken), cancellationToken);
+        await WritePartAsync(archive, workbookRelsPath, xml => WritePatchedWorkbookRelationshipsAsync(xml, original, workbookRelsPath, added, addedStylesId, book.DropsVba, removal.RemovedIds(workbookPath), pivots, pivotIds, cancellationToken), cancellationToken);
+        await WritePartAsync(archive, "[Content_Types].xml", xml => WritePatchedContentTypesAsync(xml, original, book, workbookPath, added, calcChainPath, addedStylesId is not null, stylesPath, drawings, pivots, removal, cancellationToken), cancellationToken);
 
         foreach (ZipArchiveEntry entry in original.Entries)
         {
@@ -261,6 +269,13 @@ internal static class DocumentSaver
             if (removal.Rewrites(name) == true)
             {
                 await removal.WriteCleanedAsync(entry, target, cancellationToken);
+
+                continue;
+            }
+
+            if (book.RefreshPivotTablesOnOpen == true && book.Pivots.Loaded.CacheDefinitionPaths.Contains(name, StringComparer.OrdinalIgnoreCase) == true)
+            {
+                await CopyWithRefreshOnLoadAsync(entry, target, cancellationToken);
 
                 continue;
             }
@@ -317,21 +332,45 @@ internal static class DocumentSaver
     }
 
     /// <summary>
-    /// The drawing of a sheet the package writes from scratch, and the sheet's .rels pointing to
-    /// it, when the sheet has drawings. Returns the relationship id for &lt;drawing&gt;.
+    /// The .rels of a sheet the package writes from scratch, when the sheet has drawings, pivot
+    /// tables or slicers, with the drawing part. Returns whether a .rels was written and the
+    /// relationship ids for &lt;drawing&gt; and for the slicer list in extLst.
     /// </summary>
-    private static async Task<(bool Written, string Id)> WriteNewSheetDrawingAsync(ZipArchive archive, DrawingPackage drawings, Worksheet sheet, string sheetPath, CancellationToken cancellationToken)
+    private static async Task<(bool Written, string? DrawingId, string? SlicersId)> WriteNewSheetRelationshipsAsync(ZipArchive archive, DrawingPackage drawings, PivotPackage pivots, Worksheet sheet, string sheetPath, CancellationToken cancellationToken)
     {
-        if (sheet.Extras.Drawings.Count == 0)
+        List<(string Id, string Type, string Target)> relationships = [];
+        string? drawingId = null;
+        string? slicersId = null;
+
+        if (sheet.Extras.Drawings.Count > 0)
         {
-            return (false, string.Empty);
+            string drawingPath = await drawings.WriteDrawingAsync(sheet.Extras.Drawings, cancellationToken);
+            drawingId = "rId1";
+            relationships.Add((drawingId, DrawingXml.DrawingRelationship, "/" + drawingPath));
         }
 
-        string drawingPath = await drawings.WriteDrawingAsync(sheet.Extras.Drawings, cancellationToken);
-        (string, string, string)[] relationships = [("rId1", DrawingXml.DrawingRelationship, "/" + drawingPath)];
+        if (pivots.Sheets.TryGetValue(sheet, out SheetPivotParts? parts) == true)
+        {
+            foreach ((string type, string target) in parts.Relationships)
+            {
+                string id = "rId" + SheetXml.Text(relationships.Count + 1);
+                relationships.Add((id, type, target));
+
+                if (string.Equals(target, parts.SlicersTarget, StringComparison.Ordinal) == true)
+                {
+                    slicersId = id;
+                }
+            }
+        }
+
+        if (relationships.Count == 0)
+        {
+            return (false, null, null);
+        }
+
         await WritePartAsync(archive, Ooxml.RelationshipsPath(sheetPath), xml => DrawingXml.WriteRelationshipsAsync(xml, relationships), cancellationToken);
 
-        return (true, "rId1");
+        return (true, drawingId, slicersId);
     }
 
     /// <summary>
@@ -339,25 +378,63 @@ internal static class DocumentSaver
     /// anchors added to it, since a sheet has at most one; the sheet itself is then unchanged
     /// and the id is null. Otherwise a new drawing part is added to the sheet's .rels, and the
     /// id is what &lt;drawing&gt; must refer to. Also returns the parts written in place of the
-    /// original ones.
+    /// original ones. The pivot tables and slicers added to the sheet get their relationships
+    /// in the sheet's .rels, and the id of the slicers part is returned for the sheet's extLst.
     /// </summary>
-    private static async Task<(string? Id, string[] Written)> WriteOpenedSheetDrawingAsync(ZipArchive original, ZipArchive archive, DrawingPackage drawings, string sheetPath, IReadOnlyList<DrawingItem> items, CancellationToken cancellationToken)
+    private static async Task<(string? Id, string? SlicersId, string[] Written)> WriteOpenedSheetDrawingAsync(ZipArchive original, ZipArchive archive, DrawingPackage drawings, PivotPackage pivots, Worksheet sheet, string sheetPath, IReadOnlyList<DrawingItem> items, CancellationToken cancellationToken)
     {
         string relsPath = Ooxml.RelationshipsPath(sheetPath);
         Dictionary<string, (string Type, string Target)> relationships = await XmlParts.ReadRelationshipsAsync(original, relsPath, cancellationToken);
+        HashSet<string> ids = await DrawingPackage.ReadRelationshipIdsAsync(original, relsPath, cancellationToken);
+        List<(string Id, string Type, string Target)> added = [];
+        List<string> written = [];
+        string? id = null;
+        string? slicersId = null;
 
-        foreach ((string type, string target) in relationships.Values)
+        if (items.Count > 0)
         {
-            if (Ooxml.IsRelationship(type, "drawing") == true && XmlParts.TryFindEntry(original, Ooxml.ResolveTarget(sheetPath, target), out ZipArchiveEntry? drawing) == true)
+            ZipArchiveEntry? existing = null;
+
+            foreach ((string type, string target) in relationships.Values)
             {
-                return (null, await drawings.AppendToDrawingAsync(original, drawing, items, cancellationToken));
+                if (Ooxml.IsRelationship(type, "drawing") == true && XmlParts.TryFindEntry(original, Ooxml.ResolveTarget(sheetPath, target), out ZipArchiveEntry? drawing) == true)
+                {
+                    existing = drawing;
+
+                    break;
+                }
+            }
+
+            if (existing is not null)
+            {
+                written.AddRange(await drawings.AppendToDrawingAsync(original, existing, items, cancellationToken));
+            }
+            else
+            {
+                string drawingPath = await drawings.WriteDrawingAsync(items, cancellationToken);
+                id = DrawingPackage.NextId(ids);
+                added.Add((id, DrawingXml.DrawingRelationship, "/" + drawingPath));
             }
         }
 
-        string drawingPath = await drawings.WriteDrawingAsync(items, cancellationToken);
-        HashSet<string> ids = await DrawingPackage.ReadRelationshipIdsAsync(original, relsPath, cancellationToken);
-        string id = DrawingPackage.NextId(ids);
-        (string, string, string)[] added = [(id, DrawingXml.DrawingRelationship, "/" + drawingPath)];
+        if (pivots.Sheets.TryGetValue(sheet, out SheetPivotParts? parts) == true)
+        {
+            foreach ((string type, string target) in parts.Relationships)
+            {
+                string pivotId = DrawingPackage.NextId(ids);
+                added.Add((pivotId, type, target));
+
+                if (string.Equals(target, parts.SlicersTarget, StringComparison.Ordinal) == true)
+                {
+                    slicersId = pivotId;
+                }
+            }
+        }
+
+        if (added.Count == 0)
+        {
+            return (id, slicersId, [.. written]);
+        }
 
         await WritePartAsync(archive, relsPath, async xml =>
         {
@@ -369,7 +446,77 @@ internal static class DocumentSaver
             await xml.WriteEndDocumentAsync();
         }, cancellationToken);
 
-        return (id, [relsPath]);
+        written.Add(relsPath);
+
+        return (id, slicersId, [.. written]);
+    }
+
+    /// <summary>
+    /// The sheetId each sheet gets in the saved file: its own for a sheet the file had, and the
+    /// next free ones, in tab order, for the sheets added, as the save gives them out.
+    /// </summary>
+    private static Dictionary<Worksheet, int> SheetIds(Workbook book, ZipArchive original, int nextSheetId)
+    {
+        Dictionary<Worksheet, int> ids = [];
+
+        foreach (Worksheet sheet in book.Sheets)
+        {
+            if (sheet.Source is SheetSource source && XmlParts.TryFindEntry(original, source.Path, out _) == true)
+            {
+                ids[sheet] = source.SheetId;
+
+                continue;
+            }
+
+            ids[sheet] = nextSheetId;
+            nextSheetId++;
+        }
+
+        return ids;
+    }
+
+    /// <summary>Copies a pivot cache definition with refreshOnLoad="1" on its root, so that Excel refreshes it when it opens the file.</summary>
+    private static async Task CopyWithRefreshOnLoadAsync(ZipArchiveEntry entry, Stream target, CancellationToken cancellationToken)
+    {
+        await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
+        using XmlReader reader = XmlParts.CreateReader(stream);
+        await using XmlWriter xml = XmlWriter.Create(target, XlsxWriter.XmlSettings);
+        await reader.MoveToContentAsync();
+        await xml.WriteStartDocumentAsync(true);
+        await xml.WriteStartElementAsync(reader.Prefix, reader.LocalName, reader.NamespaceURI);
+        bool empty = reader.IsEmptyElement;
+
+        if (reader.MoveToFirstAttribute() == true)
+        {
+            do
+            {
+                if (reader.LocalName == "refreshOnLoad" && reader.NamespaceURI.Length == 0)
+                {
+                    continue;
+                }
+
+                await xml.WriteAttributeStringAsync(NullIfEmpty(reader.Prefix), reader.LocalName, NullIfEmpty(reader.NamespaceURI), reader.Value);
+            }
+            while (reader.MoveToNextAttribute() == true);
+
+            reader.MoveToElement();
+        }
+
+        await xml.WriteAttributeStringAsync(null, "refreshOnLoad", null, "1");
+
+        if (empty == false)
+        {
+            await reader.ReadAsync();
+
+            while (reader.EOF == false && XmlParts.IsEnd(reader, 0) == false)
+            {
+                await xml.WriteNodeAsync(reader, true);
+            }
+        }
+
+        await xml.WriteEndElementAsync();
+        await xml.WriteEndDocumentAsync();
+        await xml.FlushAsync();
     }
 
     /// <summary>The highest priority of the sheet's conditional formatting rules, extensions (x14) included; 0 when it has none.</summary>
@@ -399,7 +546,7 @@ internal static class DocumentSaver
         return max;
     }
 
-    private static async Task WriteNewSheetAsync(XmlWriter xml, Worksheet sheet, StyleRegistry styles, bool selected, bool uses1904, string? drawingId)
+    private static async Task WriteNewSheetAsync(XmlWriter xml, Worksheet sheet, StyleRegistry styles, bool selected, bool uses1904, string? drawingId, string? slicersId)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "worksheet", Ooxml.SpreadsheetNamespace);
@@ -423,11 +570,18 @@ internal static class DocumentSaver
             await DrawingXml.WriteSheetDrawingAsync(xml, drawingId);
         }
 
+        if (slicersId is not null)
+        {
+            await xml.WriteStartElementAsync(null, "extLst", null);
+            await PivotXml.WriteSheetSlicerListAsync(xml, slicersId);
+            await xml.WriteEndElementAsync();
+        }
+
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WritePatchedSheetAsync(XmlWriter xml, ZipArchiveEntry entry, Worksheet sheet, StyleRegistry styles, bool uses1904, string? drawingId, int firstPriority, ActiveContentRemoval removal, CancellationToken cancellationToken)
+    private static async Task WritePatchedSheetAsync(XmlWriter xml, ZipArchiveEntry entry, Worksheet sheet, StyleRegistry styles, bool uses1904, string? drawingId, string? slicersId, int firstPriority, ActiveContentRemoval removal, CancellationToken cancellationToken)
     {
         SheetSource source = sheet.Source!;
         IReadOnlySet<string> removedIds = removal.RemovedIds(entry.FullName.Replace('\\', '/'));
@@ -503,6 +657,23 @@ internal static class DocumentSaver
                     await WritePendingBeforeAsync(replacements, SheetXml.OrderOf(name), SheetXml.OrderOf);
                 }
 
+                // The slicers go into the sheet's own extension list, next to what it has.
+                if (slicersId is not null && name == "extLst")
+                {
+                    XElement extensions = (XElement)await XNode.ReadFromAsync(reader, cancellationToken);
+
+                    if (removal.IsActive == true && ActiveContentRemoval.Clean(extensions, removedIds, NoShapes) == false)
+                    {
+                        extensions = new XElement(extensions.Name);
+                    }
+
+                    AddExtension(extensions, PivotXml.SheetSlicerListUri, "slicerList", "slicer", slicersId);
+                    await extensions.WriteToAsync(xml, cancellationToken);
+                    slicersId = null;
+
+                    continue;
+                }
+
                 if (insertOnly.Contains(name) == false && replacements.Remove(name, out Func<Task>? replacement) == true)
                 {
                     await replacement();
@@ -538,8 +709,39 @@ internal static class DocumentSaver
         }
 
         await WritePendingBeforeAsync(replacements, int.MaxValue, SheetXml.OrderOf);
+
+        if (slicersId is not null)
+        {
+            await xml.WriteStartElementAsync(null, "extLst", null);
+            await PivotXml.WriteSheetSlicerListAsync(xml, slicersId);
+            await xml.WriteEndElementAsync();
+        }
+
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
+    }
+
+    /// <summary>
+    /// Adds an x14 list entry (a slicer, a slicer cache) to an extension list: to the extension
+    /// with that uri when there is one, and in a new one otherwise.
+    /// </summary>
+    private static void AddExtension(XElement extensions, string uri, string listName, string itemName, string relationshipId)
+    {
+        XNamespace main = extensions.Name.Namespace;
+        XNamespace x14 = PivotXml.X14Namespace;
+        XNamespace relationships = Ooxml.RelationshipsNamespace;
+        XElement item = new(x14 + itemName, new XAttribute(relationships + "id", relationshipId));
+        XElement? extension = extensions.Elements().FirstOrDefault(element => element.Name.LocalName == "ext" && string.Equals((string?)element.Attribute("uri"), uri, StringComparison.OrdinalIgnoreCase) == true);
+        XElement? list = extension?.Elements().FirstOrDefault(element => element.Name.LocalName == listName);
+
+        if (list is not null)
+        {
+            list.Add(item);
+
+            return;
+        }
+
+        extensions.AddFirst(new XElement(main + "ext", new XAttribute("uri", uri), new XAttribute(XNamespace.Xmlns + "x14", PivotXml.X14Namespace), new XElement(x14 + listName, item)));
     }
 
     /// <summary>Writes the pending elements that belong before an element of the given order, in schema order.</summary>
@@ -627,7 +829,7 @@ internal static class DocumentSaver
         await xml.WriteEndElementAsync();
     }
 
-    private static async Task WriteNewWorkbookAsync(XmlWriter xml, Workbook book, List<NewSheet> parts, SheetList sheetList)
+    private static async Task WriteNewWorkbookAsync(XmlWriter xml, Workbook book, List<NewSheet> parts, SheetList sheetList, PivotPackage pivots, List<string> pivotIds)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "workbook", Ooxml.SpreadsheetNamespace);
@@ -636,7 +838,7 @@ internal static class DocumentSaver
         await xml.WriteElementStringAsync(null, "workbookView", null, string.Empty);
         await xml.WriteEndElementAsync();
         await WriteSheetListAsync(xml, sheetList, parts, Ooxml.RelationshipsNamespace);
-        await WriteFilterNamesAsync(xml, book, sheetList, [], true);
+        await WriteFilterNamesAsync(xml, book, sheetList, SlicerNames(pivots), true);
 
         if (book.Sheets.Any(sheet => sheet.RowEntries.Values.Any(row => row.Cells.Values.Any(cell => cell.Cell.Formula is not null))) == true)
         {
@@ -646,11 +848,13 @@ internal static class DocumentSaver
             await xml.WriteEndElementAsync();
         }
 
+        await WritePivotCachesAsync(xml, null, pivots, pivotIds, Ooxml.RelationshipsNamespace, CancellationToken.None);
+        await WriteWorkbookExtensionsAsync(xml, null, pivots, pivotIds, CancellationToken.None);
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WritePatchedWorkbookAsync(XmlWriter xml, ZipArchiveEntry entry, Workbook book, List<NewSheet> added, bool hasFormulas, SheetList sheetList, ActiveContentRemoval removal, CancellationToken cancellationToken)
+    private static async Task WritePatchedWorkbookAsync(XmlWriter xml, ZipArchiveEntry entry, Workbook book, List<NewSheet> added, bool hasFormulas, SheetList sheetList, ActiveContentRemoval removal, PivotPackage pivots, List<string> pivotIds, CancellationToken cancellationToken)
     {
         await using Stream stream = await XmlParts.OpenEntryAsync(entry, cancellationToken);
         using XmlReader reader = XmlParts.CreateReader(stream);
@@ -677,12 +881,22 @@ internal static class DocumentSaver
         Dictionary<string, Func<Task>> pending = new(StringComparer.Ordinal)
         {
             ["sheets"] = () => WriteSheetListAsync(xml, sheetList, added, relationshipsNamespace),
-            ["definedNames"] = () => WriteFilterNamesAsync(xml, book, sheetList, [], true),
+            ["definedNames"] = () => WriteFilterNamesAsync(xml, book, sheetList, SlicerNames(pivots), true),
         };
 
         if (hasFormulas == true)
         {
             pending["calcPr"] = () => WriteCalcPropertiesAsync(xml, null);
+        }
+
+        if (pivots.PivotCaches.Count > 0)
+        {
+            pending["pivotCaches"] = () => WritePivotCachesAsync(xml, null, pivots, pivotIds, relationshipsNamespace, cancellationToken);
+        }
+
+        if (pivots.SlicerCaches.Count > 0)
+        {
+            pending["extLst"] = () => WriteWorkbookExtensionsAsync(xml, null, pivots, pivotIds, cancellationToken);
         }
 
         int orderOf(string name) => OrderIn(WorkbookOrder, name);
@@ -728,7 +942,19 @@ internal static class DocumentSaver
 
                     case "definedNames":
                         pending.Remove(name);
-                        await CopyDefinedNamesAsync(xml, reader, book, sheetList, removal);
+                        await CopyDefinedNamesAsync(xml, reader, book, sheetList, removal, SlicerNames(pivots));
+
+                        break;
+
+                    case "pivotCaches" when pivots.PivotCaches.Count > 0:
+                        pending.Remove(name);
+                        await WritePivotCachesAsync(xml, (XElement)await XNode.ReadFromAsync(reader, cancellationToken), pivots, pivotIds, relationshipsNamespace, cancellationToken);
+
+                        break;
+
+                    case "extLst" when pivots.SlicerCaches.Count > 0:
+                        pending.Remove(name);
+                        await WriteWorkbookExtensionsAsync(xml, (XElement)await XNode.ReadFromAsync(reader, cancellationToken), pivots, pivotIds, cancellationToken);
 
                         break;
 
@@ -764,6 +990,60 @@ internal static class DocumentSaver
         await WritePendingBeforeAsync(pending, int.MaxValue, orderOf);
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
+    }
+
+    /// <summary>The defined names of the new slicer caches, as raw definedName elements: Excel keeps one per cache, with #N/A.</summary>
+    private static List<string> SlicerNames(PivotPackage pivots)
+    {
+        return [.. pivots.DefinedNames.Select(name => "<definedName name=\"" + System.Security.SecurityElement.Escape(name) + "\">#N/A</definedName>")];
+    }
+
+    /// <summary>pivotCaches: the original's entries, when it has the element, and one per new cache.</summary>
+    private static async Task WritePivotCachesAsync(XmlWriter xml, XElement? original, PivotPackage pivots, List<string> pivotIds, string relationshipsNamespace, CancellationToken cancellationToken)
+    {
+        if (pivots.PivotCaches.Count == 0)
+        {
+            if (original is not null)
+            {
+                await original.WriteToAsync(xml, cancellationToken);
+            }
+
+            return;
+        }
+
+        XNamespace relationships = relationshipsNamespace;
+        XElement caches = original ?? new XElement(XName.Get("pivotCaches", Ooxml.SpreadsheetNamespace));
+        XNamespace main = caches.Name.Namespace;
+
+        foreach ((int cacheId, int relationship) in pivots.PivotCaches)
+        {
+            caches.Add(new XElement(main + "pivotCache", new XAttribute("cacheId", SheetXml.Text(cacheId)), new XAttribute(relationships + "id", pivotIds[relationship])));
+        }
+
+        await caches.WriteToAsync(xml, cancellationToken);
+    }
+
+    /// <summary>The workbook's extLst: the original's extensions, with the new slicer caches in the x14 list of them.</summary>
+    private static async Task WriteWorkbookExtensionsAsync(XmlWriter xml, XElement? original, PivotPackage pivots, List<string> pivotIds, CancellationToken cancellationToken)
+    {
+        if (pivots.SlicerCaches.Count == 0)
+        {
+            if (original is not null)
+            {
+                await original.WriteToAsync(xml, cancellationToken);
+            }
+
+            return;
+        }
+
+        XElement extensions = original ?? new XElement(XName.Get("extLst", Ooxml.SpreadsheetNamespace));
+
+        foreach (int relationship in pivots.SlicerCaches)
+        {
+            AddExtension(extensions, PivotXml.WorkbookSlicerCachesUri, "slicerCaches", "slicerCache", pivotIds[relationship]);
+        }
+
+        await extensions.WriteToAsync(xml, cancellationToken);
     }
 
     /// <summary>Points activeTab and firstSheet at the positions their sheets have in the list written, or at the next sheet kept.</summary>
@@ -854,7 +1134,7 @@ internal static class DocumentSaver
     /// removed, so are the names that start macros, and a name that refers to another workbook
     /// becomes #REF!.
     /// </summary>
-    private static async Task CopyDefinedNamesAsync(XmlWriter xml, XmlReader reader, Workbook book, SheetList sheetList, ActiveContentRemoval removal)
+    private static async Task CopyDefinedNamesAsync(XmlWriter xml, XmlReader reader, Workbook book, SheetList sheetList, ActiveContentRemoval removal, List<string> added)
     {
         List<string> kept = [];
         int depth = reader.Depth;
@@ -931,6 +1211,7 @@ internal static class DocumentSaver
         }
 
         await reader.ReadAsync();
+        kept.AddRange(added);
         await WriteFilterNamesAsync(xml, book, sheetList, kept, false, filterNamesPresent);
     }
 
@@ -1060,7 +1341,7 @@ internal static class DocumentSaver
         await xml.WriteEndElementAsync();
     }
 
-    private static async Task WritePatchedWorkbookRelationshipsAsync(XmlWriter xml, ZipArchive original, string relsPath, List<NewSheet> added, string? addedStylesId, bool removeMacros, IReadOnlySet<string> removedIds, CancellationToken cancellationToken)
+    private static async Task WritePatchedWorkbookRelationshipsAsync(XmlWriter xml, ZipArchive original, string relsPath, List<NewSheet> added, string? addedStylesId, bool removeMacros, IReadOnlySet<string> removedIds, PivotPackage pivots, List<string> pivotIds, CancellationToken cancellationToken)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Relationships", Ooxml.PackageRelationshipsNamespace);
@@ -1107,6 +1388,7 @@ internal static class DocumentSaver
             await WriteRelationshipAsync(xml, addedStylesId, Ooxml.StylesRelationship, "styles.xml", null);
         }
 
+        await WritePivotRelationshipsAsync(xml, pivots, pivotIds);
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
     }
@@ -1130,7 +1412,7 @@ internal static class DocumentSaver
         await xml.WriteEndElementAsync();
     }
 
-    private static async Task WritePatchedContentTypesAsync(XmlWriter xml, ZipArchive original, Workbook book, string workbookPath, List<NewSheet> added, string? calcChainPath, bool addStyles, string? stylesPath, DrawingPackage drawings, ActiveContentRemoval removal, CancellationToken cancellationToken)
+    private static async Task WritePatchedContentTypesAsync(XmlWriter xml, ZipArchive original, Workbook book, string workbookPath, List<NewSheet> added, string? calcChainPath, bool addStyles, string? stylesPath, DrawingPackage drawings, PivotPackage pivots, ActiveContentRemoval removal, CancellationToken cancellationToken)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Types", Ooxml.ContentTypesNamespace);
@@ -1239,7 +1521,7 @@ internal static class DocumentSaver
             }
         }
 
-        foreach ((string partName, string contentType) in drawings.Overrides)
+        foreach ((string partName, string contentType) in drawings.Overrides.Concat(pivots.Overrides))
         {
             await WriteOverrideAsync(xml, partName, contentType);
         }
@@ -1248,7 +1530,17 @@ internal static class DocumentSaver
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WriteNewWorkbookRelationshipsAsync(XmlWriter xml, List<NewSheet> parts, string stylesId)
+    /// <summary>The workbook's relationships to the new pivot caches and slicer caches.</summary>
+    private static async Task WritePivotRelationshipsAsync(XmlWriter xml, PivotPackage pivots, List<string> pivotIds)
+    {
+        for (int index = 0; index < pivots.WorkbookRelationships.Count; index++)
+        {
+            (string type, string target) = pivots.WorkbookRelationships[index];
+            await WriteRelationshipAsync(xml, pivotIds[index], type, target, null);
+        }
+    }
+
+    private static async Task WriteNewWorkbookRelationshipsAsync(XmlWriter xml, List<NewSheet> parts, string stylesId, PivotPackage pivots, List<string> pivotIds)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Relationships", Ooxml.PackageRelationshipsNamespace);
@@ -1259,11 +1551,12 @@ internal static class DocumentSaver
         }
 
         await WriteRelationshipAsync(xml, stylesId, Ooxml.StylesRelationship, "styles.xml", null);
+        await WritePivotRelationshipsAsync(xml, pivots, pivotIds);
         await xml.WriteEndElementAsync();
         await xml.WriteEndDocumentAsync();
     }
 
-    private static async Task WriteNewContentTypesAsync(XmlWriter xml, List<NewSheet> parts, DrawingPackage drawings)
+    private static async Task WriteNewContentTypesAsync(XmlWriter xml, List<NewSheet> parts, DrawingPackage drawings, PivotPackage pivots)
     {
         await xml.WriteStartDocumentAsync(true);
         await xml.WriteStartElementAsync(null, "Types", Ooxml.ContentTypesNamespace);
@@ -1285,7 +1578,7 @@ internal static class DocumentSaver
 
         await WriteOverrideAsync(xml, "/xl/styles.xml", Ooxml.StylesContentType);
 
-        foreach ((string partName, string contentType) in drawings.Overrides)
+        foreach ((string partName, string contentType) in drawings.Overrides.Concat(pivots.Overrides))
         {
             await WriteOverrideAsync(xml, partName, contentType);
         }

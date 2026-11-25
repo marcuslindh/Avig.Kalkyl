@@ -55,6 +55,8 @@ internal static class Program
         await WriteChartsWithDocumentAsync(Path.Combine(output, "11-charts-document.xlsx"));
         await AddToCompatibilityFilesAsync(output);
         await WriteActiveContentRemovedAsync(Path.Combine(output, "13-active-content-removed.xlsx"));
+        await WritePivotDashboardAsync(Path.Combine(output, "17-pivot-dashboard.xlsx"));
+        await WritePivotTemplateAsync(Path.Combine(output, "17-pivot-dashboard.xlsx"), Path.Combine(output, "18-pivot-template-refreshed.xlsx"));
         await File.WriteAllLinesAsync(Path.Combine(output, "expected.txt"), Expected);
         Console.WriteLine($"Files in {output}. Open each in Excel and follow docs/excel-checklista.md; expected.txt has the values to compare.");
 
@@ -363,6 +365,122 @@ internal static class Program
         Check(removed.IsSuccess(out _, out _), removed.Error);
         Check((await book.SaveAsync(path)).IsSuccess(out _, out _), path);
         Expected.Add("13-active-content-removed.xlsx: one sheet, Data. Must open without repair and without a security warning, a links prompt or a refresh prompt. A1:A3 'N', 1, 2 as a table with a filter button; B1 = 84 and C1 = #N/A as values, not formulas; the button 'Button 2' and a picture frame without a picture (the link was removed); a hyperlink on A1 to https://example.com/. Formulas > Name Manager: Rate = #REF!, no Auto_Open. Data > Queries & Connections: empty.");
+    }
+
+    /// <summary>
+    /// A dashboard like the ones Excel users build by hand: a data sheet, two pivot tables on a
+    /// sheet of their own, slicers for Year and Month connected to both, and charts on cells
+    /// that read the pivot tables with GETPIVOTDATA.
+    /// </summary>
+    private static async Task WritePivotDashboardAsync(string path)
+    {
+        Workbook book = Workbook.Create();
+        Check(book.AddSheet("Dashboard").IsSuccess(out Worksheet? dashboard), "Dashboard");
+        Check(book.AddSheet("Control").IsSuccess(out Worksheet? control), "Control");
+        Check(book.AddSheet("Data").IsSuccess(out Worksheet? data), "Data");
+        string[] months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        string[] regions = ["North", "South", "East", "West"];
+        string[] headings = ["Year", "Month", "Region", "Visitors", "Sales"];
+
+        for (int column = 0; column < headings.Length; column++)
+        {
+            data[0, column] = Cell.Of(headings[column]).Bold();
+        }
+
+        int row = 1;
+
+        foreach (int year in new[] { 2025, 2026 })
+        {
+            for (int month = 0; month < months.Length; month++)
+            {
+                for (int region = 0; region < regions.Length; region++)
+                {
+                    data[row, 0] = year;
+                    data[row, 1] = months[month];
+                    data[row, 2] = regions[region];
+                    data[row, 3] = 1000 + ((year - 2025) * 500) + (month * 37) + (region * 11);
+                    data[row, 4] = Cell.Of(20000 + ((year - 2025) * 4000) + (month * 750) + (region * 1250) + ((row % 5) * 100.5)).NumberFormat("#,##0.00");
+                    row++;
+                }
+            }
+        }
+
+        data.FreezePanes(1);
+        PivotTable byMonth = new("ByMonth", "Data!A1:E97")
+        {
+            Rows = ["Month"],
+            Values = [new PivotValue("Sales") { NumberFormat = "#,##0" }, new PivotValue("Visitors")],
+        };
+
+        PivotTable byRegion = new("ByRegion", "Data!A1:E97")
+        {
+            Rows = ["Region"],
+            Columns = ["Year"],
+            Values = [new PivotValue("Sales", PivotAggregation.Average) { Name = "Average sale", NumberFormat = "#,##0.00" }],
+            Layout = PivotLayout.Tabular,
+            GrandTotalColumn = false,
+            Style = "PivotStyleMedium9",
+        };
+
+        Check(control.AddPivotTable(byMonth, "A3").IsSuccess(out _, out _), "ByMonth");
+        Check(control.AddPivotTable(byRegion, "F3").IsSuccess(out _, out _), "ByRegion");
+        Result year2026 = dashboard.AddSlicer(new Slicer("Year", ["ByMonth", "ByRegion"]) { Columns = 2, Selected = ["2026"], Style = "SlicerStyleLight2" }, "A1:D4");
+        Check(year2026.IsSuccess(out _, out _), year2026.Error);
+        Result allMonths = dashboard.AddSlicer(new Slicer("Month", ["ByMonth", "ByRegion"]) { Columns = 6, ShowCaption = false, ItemHeight = 16 }, "E1:M4");
+        Check(allMonths.IsSuccess(out _, out _), allMonths.Error);
+
+        dashboard["A6"] = Cell.Of("Month").Bold();
+        dashboard["B6"] = Cell.Of("Sales").Bold();
+        dashboard["C6"] = Cell.Of("Visitors").Bold();
+
+        for (int index = 0; index < months.Length; index++)
+        {
+            string label = "A" + (7 + index).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            dashboard[6 + index, 0] = months[index];
+            dashboard[6 + index, 1] = Cell.FromFormula("IFERROR(GETPIVOTDATA(\"Sum of Sales\",Control!$A$3,\"Month\"," + label + "),0)").NumberFormat("#,##0");
+            dashboard[6 + index, 2] = Cell.FromFormula("IFERROR(GETPIVOTDATA(\"Visitors\",Control!$A$3,\"Month\"," + label + "),0)");
+        }
+
+        dashboard["A20"] = Cell.Of("Region").Bold();
+        dashboard["B20"] = Cell.Of("Average sale 2026").Bold();
+
+        for (int index = 0; index < regions.Length; index++)
+        {
+            string label = "A" + (21 + index).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            dashboard[20 + index, 0] = regions[index];
+            dashboard[20 + index, 1] = Cell.FromFormula("IFERROR(GETPIVOTDATA(\"Average sale\",Control!$F$3,\"Region\"," + label + ",\"Year\",2026),NA())").NumberFormat("#,##0");
+        }
+
+        dashboard["E20"] = Cell.Of("Total sales").Bold();
+        dashboard["F20"] = Cell.FromFormula("GETPIVOTDATA(\"Sum of Sales\",Control!$A$3)").NumberFormat("#,##0");
+        Check(dashboard.AddChart(new Chart(ChartType.Column) { Title = "Sales per month", Series = [new ChartSeries("Sales", "B7:B18", "A7:A18")], Legend = LegendPosition.None }, "E6:M18").IsSuccess(out _, out _), "chart");
+        Check(dashboard.AddChart(new Chart(ChartType.Bar) { Title = "Average sale per region", Series = [new ChartSeries("2026", "B21:B24", "A21:A24")], Legend = LegendPosition.None }, "E22:M34").IsSuccess(out _, out _), "chart");
+        dashboard.SetColumnWidth(1, 14);
+        await book.RecalculateAsync(RecalculationScope.All);
+        Check((await book.SaveAsync(path)).IsSuccess(out _, out _), path);
+        Expected.Add("17-pivot-dashboard.xlsx: three sheets. Control has the pivot tables ByMonth (A3, Month down, Sum of Sales and Sum of Visitors) and ByRegion (F3, tabular, Region down and Year across, Average sale, no grand total column, style Medium 9). Dashboard has a Year slicer (2026 selected, two columns) and a Month slicer (six columns, no caption) connected to both; clicking Jan in the Month slicer filters both pivot tables and the charts. Must open without repair and show the same numbers before and after Data > Refresh All. Dashboard!F20 = "
+            + dashboard["F20"].Value.ToString() + " (sales 2026), B7 = " + dashboard["B7"].Value.ToString() + ", B21 = " + dashboard["B21"].Value.ToString() + ".");
+    }
+
+    /// <summary>
+    /// File 17 opened again as a template: new sales figures in Data and RefreshPivotTablesOnOpen,
+    /// so the pivot tables, which the package now only keeps, show the new figures once Excel has
+    /// refreshed them.
+    /// </summary>
+    private static async Task WritePivotTemplateAsync(string template, string path)
+    {
+        Result<Workbook> opened = await Workbook.OpenAsync(template);
+        Check(opened.IsSuccess(out Workbook? book), opened.Error);
+        Check(book.Sheet("Data").IsSuccess(out Worksheet? data), "Data");
+
+        for (int row = 1; row < data.RowCount; row++)
+        {
+            data.SetValue(row, 4, 100);
+        }
+
+        book.RefreshPivotTablesOnOpen = true;
+        Check((await book.SaveAsync(path)).IsSuccess(out _, out _), path);
+        Expected.Add("18-pivot-template-refreshed.xlsx: file 17 with every sale in Data set to 100, saved with RefreshPivotTablesOnOpen. When Excel has opened it, ByMonth shows Sum of Sales 400 for each month (four regions, 2026 selected) and ByRegion 100 everywhere; Dashboard!F20 = 4 800 once Excel has recalculated.");
     }
 
     private static async Task AddToCompatibilityFilesAsync(string output)

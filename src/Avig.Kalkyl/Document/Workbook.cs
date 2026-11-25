@@ -40,6 +40,7 @@ public sealed class Workbook
         Styles = styles;
         Uses1904Dates = uses1904Dates;
         WorkbookPath = workbookPath;
+        Pivots = new PivotRegistry(this);
     }
 
     /// <summary>The worksheets, in tab order.</summary>
@@ -71,6 +72,64 @@ public sealed class Workbook
 
     /// <summary>The workbook's defined names, read when the file is opened. Used by the formula engine.</summary>
     internal List<Formulas.DefinedName> DefinedNames { get; } = [];
+
+    /// <summary>The pivot tables and slicers: those the file had and those added.</summary>
+    internal PivotRegistry Pivots { get; }
+
+    /// <summary>
+    /// The pivot tables: those the file had when it was opened, then those added with
+    /// <see cref="Worksheet.AddPivotTable(PivotTable, CellAddress)"/>.
+    /// </summary>
+    public IReadOnlyList<PivotTableInfo> PivotTables
+    {
+        get
+        {
+            List<PivotTableInfo> tables = [];
+
+            foreach (PivotGrid grid in Pivots.Grids)
+            {
+                tables.Add(new PivotTableInfo(grid.Name, grid.Sheet.Name, grid.Location, grid.CacheId));
+            }
+
+            return tables;
+        }
+    }
+
+    /// <summary>
+    /// The pivot caches: those the file had, then one per source of the pivot tables added.
+    /// <see cref="PivotCacheInfo.RefreshOnLoad"/> is what the saved file will say.
+    /// </summary>
+    public IReadOnlyList<PivotCacheInfo> PivotCaches
+    {
+        get
+        {
+            List<PivotCacheInfo> caches = [];
+
+            foreach (PivotCacheInfo cache in Pivots.Loaded.Caches)
+            {
+                caches.Add(cache with { RefreshOnLoad = cache.RefreshOnLoad == true || RefreshPivotTablesOnOpen == true });
+            }
+
+            foreach ((int cacheId, PivotSource source, List<CreatedPivot> _) in Pivots.CacheGroups)
+            {
+                if (PivotCacheData.Read(source).IsSuccess(out PivotCacheData? data) == true)
+                {
+                    caches.Add(new PivotCacheInfo(cacheId, source.Display, data.FieldNames, data.Records.Count, true));
+                }
+            }
+
+            return caches;
+        }
+    }
+
+    /// <summary>
+    /// Makes Excel refresh every pivot cache from its source when it opens the saved file, so
+    /// that the pivot tables of a template show the data the package put in. The save sets
+    /// refreshOnLoad on each cache the file has; the caches of pivot tables the package adds
+    /// always have it. Excel refreshes quietly, except for a cache on a data connection, which
+    /// it may ask about. False when the workbook is opened, whatever the file says.
+    /// </summary>
+    public bool RefreshPivotTablesOnOpen { get; set; }
 
     /// <summary>Cells set since the last recalculation. Read and cleared by the formula engine.</summary>
     internal HashSet<(Worksheet Sheet, int Row, int Column)> ChangedCells => changedCells;
@@ -265,6 +324,9 @@ public sealed class Workbook
     /// formulas affected by cells set since the last recalculation are calculated, together with
     /// volatile functions; <see cref="RecalculationScope.All"/> calculates every formula.
     /// A function the engine does not know gives #NAME?, as in Excel; the report lists them.
+    /// Pivot tables added with <see cref="Worksheet.AddPivotTable(PivotTable, CellAddress)"/>
+    /// are rendered again from their sources first, and once more after the formulas when a
+    /// source holds formulas, so that GETPIVOTDATA reads them as they are.
     /// </summary>
     /// <param name="scope">Which formulas to calculate.</param>
     /// <param name="cancellationToken">Cancels the calculation.</param>
@@ -272,8 +334,16 @@ public sealed class Workbook
     public async Task<RecalculationReport> RecalculateAsync(RecalculationScope scope = RecalculationScope.Changed, CancellationToken cancellationToken = default)
     {
         DateTime now = Clock.GetLocalNow().DateTime;
+        RenderPivotTables();
+        RecalculationReport report = await Task.Run(() => Formulas.Recalculator.Run(this, scope, now, cancellationToken), cancellationToken);
 
-        return await Task.Run(() => Formulas.Recalculator.Run(this, scope, now, cancellationToken), cancellationToken);
+        if (RenderPivotTables() == true)
+        {
+            RecalculationReport again = await Task.Run(() => Formulas.Recalculator.Run(this, RecalculationScope.Changed, now, cancellationToken), cancellationToken);
+            report = again with { Calculated = report.Calculated + again.Calculated };
+        }
+
+        return report;
     }
 
     /// <summary>
@@ -495,6 +565,22 @@ public sealed class Workbook
     internal void MarkChanged(Worksheet sheet, int row, int column)
     {
         changedCells.Add((sheet, row, column));
+    }
+
+    /// <summary>Renders the added pivot tables into their sheets; true when a cell changed.</summary>
+    internal bool RenderPivotTables()
+    {
+        Result rendered = Pivots.RenderAll(out bool changed);
+
+        // A source that worked when the pivot table was added can stop working only through a
+        // change to its headings; the table then keeps its last rendering, as Excel keeps a
+        // pivot table whose refresh fails.
+        if (rendered.IsFailure(out _, out _) == true)
+        {
+            return false;
+        }
+
+        return changed;
     }
 
     internal void AddLoadedSheet(Worksheet sheet)

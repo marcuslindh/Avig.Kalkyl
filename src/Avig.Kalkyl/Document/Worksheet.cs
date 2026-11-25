@@ -449,13 +449,94 @@ public sealed class Worksheet
         return AddPicture(picture, range.First);
     }
 
+    /// <summary>
+    /// Adds a pivot table with the top-left corner of its report at a cell (its Filters area,
+    /// when it has filter fields, then a blank row and the table). The package calculates it
+    /// from the source cells and writes it into this sheet's cells, so formulas and GETPIVOTDATA
+    /// can read it, and again when the workbook is recalculated or saved. The file gets the pivot
+    /// cache with the source data and refreshOnLoad, so Excel shows the table as it is and
+    /// refreshes it when it opens the file. Pivot tables on the same source share a cache. A
+    /// source whose heading is emptied after the table was added makes saving throw
+    /// InvalidOperationException, as a pivot cache cannot be written without field names.
+    /// </summary>
+    /// <param name="pivotTable">The pivot table.</param>
+    /// <param name="topLeft">The top-left cell of the report.</param>
+    /// <returns>
+    /// Success; NotFound when the source sheet, table or a field does not exist; Conflict when
+    /// the sheet has a pivot table of that name, or the report would overlap another pivot table
+    /// or its own source; Invalid when a heading of the source is empty, the table would not fit
+    /// on the sheet, or the file is Strict OOXML.
+    /// </returns>
+    public Result AddPivotTable(PivotTable pivotTable, CellAddress topLeft)
+    {
+        ArgumentNullException.ThrowIfNull(pivotTable);
+
+        if (CheckDrawable().IsFailure(out string? error, out ResultStatus status) == true)
+        {
+            return Result.Failure(error, status);
+        }
+
+        Result added = Workbook.Pivots.Add(this, pivotTable, topLeft);
+
+        if (added.IsSuccess(out _, out _) == true)
+        {
+            Workbook.MarkChanged();
+        }
+
+        return added;
+    }
+
+    /// <summary>Adds a pivot table with the top-left corner of its report at a cell given in A1 notation, such as <c>A3</c>.</summary>
+    /// <param name="pivotTable">The pivot table.</param>
+    /// <param name="topLeft">The top-left cell of the report.</param>
+    /// <returns>As <see cref="AddPivotTable(PivotTable, CellAddress)"/>.</returns>
+    public Result AddPivotTable(PivotTable pivotTable, string topLeft)
+    {
+        return AddPivotTable(pivotTable, ParseAddress(topLeft));
+    }
+
+    /// <summary>
+    /// Adds a slicer over a block of cells. It filters the pivot tables it names, which must have
+    /// been added with <see cref="AddPivotTable(PivotTable, CellAddress)"/> and share a source;
+    /// they are rendered again with the items it selects. A second slicer on the same field of
+    /// the same source shares the first one's selection, as in Excel.
+    /// </summary>
+    /// <param name="slicer">The slicer.</param>
+    /// <param name="area">The cells it covers, for example <c>B2:H4</c>.</param>
+    /// <returns>
+    /// Success; NotFound when a pivot table, the field or a selected item does not exist;
+    /// Conflict when the name is taken or another slicer on the field selects other items;
+    /// Invalid when the pivot tables have different sources or the file is Strict OOXML.
+    /// </returns>
+    public Result AddSlicer(Slicer slicer, CellRange area)
+    {
+        ArgumentNullException.ThrowIfNull(slicer);
+        Result added = Workbook.Pivots.AddSlicer(this, slicer, area);
+
+        if (added.IsSuccess(out _, out _) == true)
+        {
+            Workbook.MarkChanged();
+        }
+
+        return added;
+    }
+
+    /// <summary>Adds a slicer over a block of cells given in A1 notation, such as <c>B2:H4</c>.</summary>
+    /// <param name="slicer">The slicer.</param>
+    /// <param name="area">The cells it covers.</param>
+    /// <returns>As <see cref="AddSlicer(Slicer, CellRange)"/>.</returns>
+    public Result AddSlicer(Slicer slicer, string area)
+    {
+        return AddSlicer(slicer, SheetWriter.ParseRange(area));
+    }
+
     internal SheetExtras Extras => extras;
 
     /// <summary>
     /// A Strict OOXML file has its own namespaces for drawings and charts as well. Parts written
     /// with the transitional ones would make a package that is neither, so none are added.
     /// </summary>
-    private Result CheckDrawable()
+    internal Result CheckDrawable()
     {
         if (Source is not null && string.Equals(Source.Namespace, Ooxml.SpreadsheetNamespace, StringComparison.Ordinal) == false)
         {

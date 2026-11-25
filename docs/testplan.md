@@ -112,6 +112,28 @@ kom två skydd till, med paketlagret Avig.OpenXml 0.1.6.
 | Bladlistan | Sparningen skriver nu bladlistan med diagram-, makro- och dialogblad kvar på sina platser, så att `localSheetId` och `activeTab` fortsätter att stämma. Förut föll de bort ur `<sheets>`, och en fil från Excel med ett makroblad före kalkylbladet gick inte att öppna i Excel efter att ha sparats. |
 | FUN-04 (aktivt innehåll) | 2026-11-25 i Excel 365 via COM: en fil som Excel själv skapat med makroblad, dialogblad, OLE-objekt, extern länk, frågetabell och Power Query öppnades utan reparation både efter vanlig sparning och efter `RemoveActiveContent`, liksom en med en Power Query-tabell och en formulärknapp. ActiveX gick inte att lägga in via COM på maskinen, så ActiveX finns bara i de handskrivna testfilerna och i ExcelCheck-fil 13. Alla 85 ExcelCheck-filer, med den nya fil 13 (allt aktivt innehåll borttaget), och de 30 handledningsfiler som går att rensa öppnades utan reparation efter rensningen. De övriga 8 har en datamodell och vägras. En kontrollfil med ett trasigt index till de delade strängarna vägrades, vilket visar att kontrollen fungerar. |
 
+### Status 2026-11-25: pivottabeller och utsnitt
+
+Dokumentmodellen skapar pivottabeller (`Worksheet.AddPivotTable`) och utsnitt
+(`Worksheet.AddSlicer`), listar dem som en fil har (`Workbook.PivotTables`, `PivotCaches`),
+markerar en mall så att Excel uppdaterar pivotcachen när filen öppnas
+(`RefreshPivotTablesOnOpen`), och GETPIVOTDATA räknas. Facit är Excel 365 självt: en arbetsbok
+med samma data och sju pivottabeller skapades via COM, och delarna Excel sparade är förebilden.
+
+| Testfall | Åtgärd |
+|---|---|
+| PIV-01 (layout) | `PivotTests` bygger samma sju pivottabeller som Excel-filen (kompakt, disposition och tabell, två radfält, kolumnfält, flera värdefält, filterfält, inga totaler, värden utan rader, kolumnfält utan rader) och nio till. Cellerna, `location`, `pivotFields`, `rowItems`, `colItems` och `pageFields` är desamma som Excel skrev, tecken för tecken. Excel 365 öppnade paketets filer, uppdaterade pivotcachen (`refreshOnLoad`) och visade exakt de celler paketet skrivit, för alla 16 tabeller (`TableRange2` läst via COM). Fyndet då: `rowGrandTotals` är totalraden längst ner, inte kolumnen till höger. |
+| PIV-02 (cachen) | Cachedefinitionen har samma `sharedItems` som Excel skrev för samma data, och posterna är lika med källcellerna (`The_cache_records_equal_the_source_cells`). Text, tal, datum, blanka, fel och sanningsvärden i samma kolumn ger Excels attribut. |
+| PIV-03 (utsnitt) | Utsnittscachen, utsnittsdelen, ankaret i ritningen (`mc:AlternateContent` med `sle:slicer`), bladets och arbetsbokens `extLst` och namnet `Slicer_…` skrivs som Excel skriver dem. Via COM: utsnitten var kopplade till båda pivottabellerna, och ett klick (`SlicerItems(...).Selected`) filtrerade båda och ändrade GETPIVOTDATA i formlerna. Fallbackformens `cNvPr id="0"`, som Excel skriver, underkänns av schemavalidatorn, så den får formens eget id. |
+| PIV-04 (öppna och spara) | En fil med pivottabeller och utsnitt öppnas och sparas med alla delar oförändrade, också efter `RemoveActiveContent` (pivottabeller på blad blockerar inte, de på en anslutning gör det fortfarande). Referensinstrumentpanelen från Excel (12 blad, 113 diagram, 8 utsnitt, en pivotcache på en tabell) öppnades, räknades om och sparades; Excel öppnade den utan reparation, och GETPIVOTDATA-formlerna gav samma värden som Excel. Samma fil med en ny pivottabell på tabellen `mydata` och ett utsnitt, och med `RefreshPivotTablesOnOpen` och ändrade data, öppnades också utan reparation. Referensfilen ligger inte i repot. |
+| PIV-05 (trasiga delar) | En pivotdel eller cachedefinition som inte är XML hindrar inte att filen öppnas; tabellen saknas i listan, GETPIVOTDATA ger `#REF!`, och delen sparas som den var (`A_pivot_part_that_is_not_XML_leaves_the_file_open_and_kept`). |
+| PIV-06 (fuzz) | `roundtrip` gör också en pivottabell av cellerna, med första raden som rubriker: den ger ett resultat i stället för ett undantag, filen öppnas igen med en tabell och en cache med varje rad, och GETPIVOTDATA:s totalsumma är antalet värden i den räknade kolumnen. |
+| FUN-04 (pivot) | ExcelCheck-fil 17 (instrumentpanel: data, två pivottabeller, utsnitt för år och månad kopplade till båda, diagram över GETPIVOTDATA) och 18 (fil 17 som mall med nya data och `RefreshPivotTablesOnOpen`) öppnades utan reparation i Excel 365 via COM. Fil 17 visade samma celler före och efter Excels uppdatering, fil 18 visade de nya talen efter uppdateringen. |
+
+Inte gjort: pivottabeller i strömskrivaren (källan är redan skriven när tabellen kunde räknas ut),
+beräknade fält och objekt, gruppering av datum och tal, sortering efter värde, värdefältet på
+rader, pivottabeller på anslutningar och datamodellen, och tidslinjer.
+
 Det som återstår kräver en miljö eller ett beslut:
 
 - **FUN-04:** öppna filerna i riktiga Excel. `tools/Avig.Kalkyl.ExcelCheck` skapar filerna, och de är kontrollerade mot schemat. Fil 10–12 (diagram, bilder och villkorsstyrd formatering, också tillagda i de 38 handledningsfilerna) gav inga nya schemafel 2026-11-24, och filernas egna diagram, bilder och regler fanns kvar. Samma dag öppnades alla 84 filer automatiskt i Excel 365 (16.0, build 20625) via COM. Ingen fil behövde repareras eller vägrades. En kontrollfil med en trasig rad vägrades, vilket visar att kontrollen fungerar. Efter full omräkning (Ctrl+Alt+F9) hade inga värden ändrats, utom de som beror på `RANDBETWEEN` i `class-correlation`. Det som kräver ögon i `docs/excel-checklista.md` återstår: diagrammens och formateringens utseende, makrona i fil 07 och 08 och jämförelsen med originalen.

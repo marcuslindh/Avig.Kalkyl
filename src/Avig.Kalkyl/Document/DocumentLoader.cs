@@ -72,6 +72,21 @@ internal static class DocumentLoader
 
         try
         {
+            book.Pivots.Loaded = await PivotReader.LoadAsync(book, reader, cancellationToken);
+        }
+        catch (XmlException)
+        {
+            // A broken .rels or workbook part: the file opens without the list of its pivot
+            // tables, as it did before the package read them, and the parts are kept as they are.
+            book.Pivots.Loaded = new LoadedPivots();
+        }
+        catch (InvalidDataException exception)
+        {
+            return Result.Invalid(KalkylError.Describe(exception));
+        }
+
+        try
+        {
             await CheckWellFormedAsync(reader.Archive, "[Content_Types].xml", cancellationToken);
         }
         catch (XmlException exception)

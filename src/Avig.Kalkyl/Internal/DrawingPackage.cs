@@ -182,6 +182,14 @@ internal sealed class DrawingPackage
 
         foreach (DrawingItem item in items)
         {
+            // A slicer refers to no part of its own: the slicers part is the sheet's.
+            if (item.Slicer is not null)
+            {
+                ids.Add(string.Empty);
+
+                continue;
+            }
+
             string id = NextId(usedIds);
             ids.Add(id);
 

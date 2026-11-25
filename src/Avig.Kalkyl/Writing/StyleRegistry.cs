@@ -358,7 +358,8 @@ internal sealed class StyleRegistry
         await xml.WriteEndElementAsync();
     }
 
-    private int GetFormatId(string? format)
+    /// <summary>The numFmtId of a number format: the built-in id, or a custom one added to numFmts. 0 for null.</summary>
+    public int GetFormatId(string? format)
     {
         if (format is null)
         {
