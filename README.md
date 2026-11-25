@@ -10,8 +10,9 @@ Read, write, edit and calculate Excel `.xlsx` files in .NET. Three ways in, one 
   built-in engine of 300+ functions, and saves it with everything it does not understand (pivot
   tables, comments, macros, other programs' extensions) left as it was.
 
-Charts, pictures and conditional formatting can be added with the streaming writer and the
-document model, also to files that already have their own. Expected failures come back as
+Charts, pictures, shapes, conditional formatting, sheet views and hyperlinks can be added with
+the streaming writer and the document model, also to files that already have their own, so a
+dashboard like Excel's templates can be built from code. Expected failures come back as
 [Avig.Result](https://www.nuget.org/packages/Avig.Result) values instead of exceptions. No
 dependencies besides Avig.Result. Safe for trimming and Native AOT.
 
@@ -38,6 +39,7 @@ code does not have to.
 | Change cells in an existing file and save it | `Workbook.OpenAsync`, `Worksheet` | [12](#12-edit-an-existing-workbook), [13](#13-open-from-and-save-to-a-stream) |
 | Calculate formulas, or one formula on its own | `RecalculateAsync`, `Evaluate` | [14](#14-calculate-formulas) |
 | Add charts, pictures or conditional formatting | `AddChart`, `AddPicture`, `AddConditionalFormat` | [15](#15-charts)–[17](#17-conditional-formatting) |
+| Build a dashboard: cards, buttons that link to sheets, SVG icons, styled charts | `AddShape`, `AddGroup`, `Picture.FromSvg`, `Chart` options, `SheetView` | [20](#20-shapes-groups-and-dashboards)–[22](#22-sheet-view-and-cell-links) |
 | Find macros, links and connections in a file from outside, and take them out | `Workbook.ActiveContent`, `RemoveActiveContent` | [19](#19-active-content) |
 
 ## 0. Results instead of exceptions
@@ -723,14 +725,17 @@ if (missing.IsFailure(out string? reason, out ResultStatus status) == true)
 await book.SaveAsync("budget-charts.xlsx");
 ```
 
-The charts store no copy of the values: a program that only previews the file, without
-calculating, may show them empty. Category labels are written as text references, so dates as
+Colours per point, data labels, gradients, axes, fonts and combination charts are in
+[21](#21-chart-styling-and-combination-charts). The charts store no copy of the values: a program
+that only previews the file, without calculating, may show them empty. Category labels are written as text references, so dates as
 categories show as numbers unless the cells have a date format.
 
 ## 16. Pictures
 
-PNG, JPEG and GIF. The format and the size are read from the file's header, without an image
-library, and the image is stored exactly as given.
+PNG, JPEG and GIF, and SVG with `Picture.FromSvg` (see [20](#20-shapes-groups-and-dashboards)).
+The format and the size are read from the file's header, without an image library, and the image
+is stored exactly as given. A picture can also be see-through (`Transparency`), cast a `Shadow`
+and link somewhere (`Link`), and the same picture put on a sheet twice is stored once.
 
 <!-- example: pictures -->
 ```csharp
@@ -889,6 +894,213 @@ without loading the sheets. `RemoveActiveContent` returns `Invalid`, and changes
 taking something out would break the workbook: a pivot table or a data model (Power Pivot) that
 gets its data from a connection, or a chart drawn from another workbook.
 
+## 20. Shapes, groups and dashboards
+
+Rectangles, rounded rectangles, ellipses, triangles, diamonds, hexagons, block arrows, chevrons,
+pentagons, lines and text boxes, each with a fill (none, a colour with transparency, or a linear
+gradient), an outline (colour, width, dash), an outer and an inner shadow, soft edges, a turn,
+text in runs with their own font, and a link to a cell in the workbook or to a web address.
+`ShapeGroup` keeps shapes and pictures together as one button with one link. A drawing goes over
+a block of cells, or at a place in points with `DrawingBounds`, where it stays when rows and
+columns change size, as a dashboard's cards should. The same methods are on `Worksheet`, where
+they return a `Result` (`Invalid` for a Strict OOXML file).
+
+<!-- example: dashboard -->
+```csharp
+if ((await XlsxWriter.CreateAsync("dashboard.xlsx")).IsSuccess(out XlsxWriter? writer) == false)
+{
+    return;
+}
+
+await using (writer)
+{
+    // A chart refers to sheets written before it, so the data comes first.
+    if ((await writer.AddSheetAsync("Data")).IsFailure(out string? error, out _, out SheetWriter? data) == true)
+    {
+        Console.WriteLine(error);
+
+        return;
+    }
+
+    await data.WriteRowAsync(["Done", 0.72]);
+    await data.WriteRowAsync(["Left", 0.28]);
+
+    if ((await writer.AddSheetAsync("Dashboard")).IsSuccess(out SheetWriter? sheet) == false)
+    {
+        return;
+    }
+
+    // No gridlines or headers: the shapes are the page. Set before the first row.
+    sheet.SetView(new SheetView { ShowGridLines = false, ShowHeaders = false, Zoom = 90, TabColor = "#2384F9" });
+
+    // A card: a rounded rectangle with a gradient, a shadow, two lines of text and a link.
+    Shape card = new(ShapeKind.RoundedRectangle)
+    {
+        Fill = Fill.Gradient("#2384F9", "#605776", angle: 45),
+        Outline = Outline.None,
+        Shadow = new Shadow(),                        // Excel's "Offset: Bottom Right"
+        CornerRadius = 0.12,
+        Text = new ShapeText(
+        [
+            new TextRun("Projects\n", new TextFont { Size = 11, Color = "#E6ECF5" }),
+            new TextRun("24", new TextFont { Size = 26, Bold = true, Color = "#FFFFFF" }),
+        ])
+        {
+            Horizontal = HorizontalAlignment.Left,
+            MarginLeft = 16,
+        },
+        Link = Hyperlink.ToCell("Data", "A1") with { Tooltip = "Open the data" },
+        Description = "24 projects",
+    };
+
+    sheet.AddShape(card, DrawingBounds.FromPoints(190, 20, 235, 95));   // left, top, width, height
+    sheet.AddShape(new Shape(ShapeKind.UpArrow) { Fill = Fill.Solid("#8BFFF7"), Outline = Outline.None }, "J3:J5");
+
+    // An SVG icon. Excel 2016 and later draw the SVG; older versions a transparent pixel.
+    Result<Picture> icon = Picture.FromSvg("""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" fill="#8BFFF7"/></svg>"""u8);
+
+    if (icon.IsFailure(out string? invalid, out _, out Picture? svg) == true)
+    {
+        Console.WriteLine(invalid);   // not an SVG document
+
+        return;
+    }
+
+    // A navigation button: shapes and pictures that move, resize and link as one.
+    ShapeGroup button = new(
+    [
+        GroupItem.Of(new Shape(ShapeKind.RoundedRectangle) { Fill = Fill.Solid("#232D45"), Outline = Outline.None }, DrawingBounds.FromPoints(0, 0, 145, 40)),
+        GroupItem.Of(svg with { Description = "Data" }, DrawingBounds.FromPoints(12, 9, 22, 22)),
+        GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText("Data", new TextFont { Color = "#FFFFFF" }) { Horizontal = HorizontalAlignment.Left } }, DrawingBounds.FromPoints(42, 0, 100, 40)),
+    ])
+    {
+        Link = Hyperlink.ToCell("Data", "A1"),
+    };
+
+    sheet.AddGroup(button, DrawingBounds.FromPoints(20, 20, 145, 40));
+
+    // A gauge: a doughnut with a thick ring, a colour per slice, no border or background.
+    Chart gauge = new(ChartType.Doughnut)
+    {
+        Series = [new ChartSeries("Share", "Data!B1:B2", "Data!A1:A2") { PointColors = ["#00C5AE", "#2E3850"], Outline = Outline.None }],
+        HoleSize = 75,
+        Legend = LegendPosition.None,
+        Background = Fill.None,
+        Border = Outline.None,
+    };
+
+    Result added = sheet.AddChart(gauge, DrawingBounds.FromPoints(440, 20, 160, 160));
+
+    sheet.AddHyperlink("A1", Hyperlink.ToUrl("https://example.com/help"));   // a cell that links
+    await sheet.WriteRowAsync([Cell.Of("Help").Underline().FontColor("#0563C1")]);
+}
+```
+
+What is left unset looks as a shape just inserted in Excel does: the theme's blue with a darker
+outline and white text, or for a text box no fill and no outline. A group's items are placed in
+the group's own coordinates and scaled so that the box around them fills the group's place. An
+SVG is stored the way Excel 2016 stores it, with a raster picture beside it for older versions:
+`FromSvg(svg)` uses a transparent pixel, `FromSvg(svg, fallback)` your PNG. The size comes from
+the SVG's `width` and `height` or its `viewBox`. Files Excel saved keep their own shapes, groups,
+icons and charts byte for byte; new ones are added after them.
+
+## 21. Chart styling and combination charts
+
+Every option is optional, and a chart without them is written as before. Per chart:
+`HoleSize` and `FirstSliceAngle` (doughnut and pie), `GapWidth` and `Overlap` (column and bar),
+`VaryColors`, `RoundedCorners`, `Background` and `PlotBackground` (`Fill`), `Border`
+(`Outline.None` removes it), `Font`, `TitleFont`, `LegendFont`, `DataLabels`, and a `ChartAxis`
+each for `CategoryAxis`, `ValueAxis` and `SecondaryValueAxis` (`Visible`, `Gridlines`,
+`GridlineOutline`, `Line`, `Minimum`, `Maximum`, `MajorUnit`, `NumberFormat`, `Font`). Per
+series: `Type` (column, line and area mix in one chart), `SecondaryAxis`, `Fill`, `Outline` (the
+line of a line series), `Shadow`, `PointColors`, `Smooth`, `Marker`, `MarkerSize` and its own
+`DataLabels`.
+
+<!-- example: charts-styled -->
+```csharp
+Result<Workbook> opened = await Workbook.OpenAsync("budget.xlsx");
+
+if (opened.IsFailure(out string? error, out _, out Workbook? book) == true || book.Sheet("Budget").IsSuccess(out Worksheet? sheet) == false)
+{
+    return;
+}
+
+// Pick out one month: a colour per point, null for the others.
+string?[] highlight = new string?[12];
+highlight[7] = "#00C5AE";
+
+Chart chart = new(ChartType.Column)
+{
+    Title = "Amount and target",
+    TitleFont = new TextFont { Size = 12, Bold = true },
+    Series =
+    [
+        new ChartSeries("Amount", "B2:B13", "A2:A13", "#3A4A6B")
+        {
+            PointColors = highlight,
+            DataLabels = new DataLabels { Position = DataLabelPosition.InsideEnd, NumberFormat = "# ##0", Font = new TextFont { Size = 8, Color = "#FFFFFF" } },
+        },
+
+        // A combination chart: this series is a smooth dashed line, on a second axis.
+        new ChartSeries("Target", "C2:C13", "A2:A13")
+        {
+            Type = ChartType.Line,
+            Smooth = true,
+            Marker = MarkerStyle.Circle,
+            MarkerSize = 6,
+            Outline = new Outline("#E1541C", 2.25) { Dash = LineDash.Dash },
+            SecondaryAxis = true,
+        },
+    ],
+    GapWidth = 60,                                    // narrower gaps between the columns
+    Background = Fill.Gradient("#FFFFFF", "#EEF3FA"),
+    Border = Outline.None,                            // no frame
+    Font = new TextFont { Name = "Segoe UI", Size = 9, Color = "#595959" },
+    ValueAxis = new ChartAxis { Minimum = 0, MajorUnit = 2000, NumberFormat = "# ##0", Line = Outline.None, GridlineOutline = new Outline("#D9D9D9", 0.5) },
+    SecondaryValueAxis = new ChartAxis { Visible = false, Minimum = 0, Maximum = 14000 },
+    Legend = LegendPosition.Top,
+};
+
+Result added = sheet.AddChart(chart, "F2:N20");
+await book.SaveAsync("budget-styled.xlsx");
+```
+
+A funnel is a stacked bar chart whose first series has `Fill = Fill.None`; a gauge is a doughnut
+with two points, `PointColors` and a large `HoleSize`. Excel repairs a file whose data labels sit
+where the chart type does not allow (`OutsideEnd` on a stacked column, any position on a
+doughnut), so `AddChart` throws an `ArgumentException` for those; `DataLabels.Position` lists
+what each type takes. A lone series with its own point colours gets a legend entry per
+category, as Excel shows it; set `Legend = LegendPosition.None` to leave it out.
+
+## 22. Sheet view and cell links
+
+`SheetView` holds what Excel's View tab sets for a sheet: gridlines, row and column headers,
+zoom, the tab's colour, the selected cell and right-to-left. On the streaming writer it is
+`SetView` before the first row; in the document model `Worksheet.View`, which is read from an
+opened file and rewrites only what changes (a view attribute the model does not know, such as
+page layout, is kept). `AddHyperlink` makes a cell a link to a cell in the workbook or to a web
+address; the cell keeps its value and style, and an opened file keeps its own links.
+
+<!-- example: sheet-view -->
+```csharp
+Result<Workbook> opened = await Workbook.OpenAsync("budget.xlsx");
+
+if (opened.IsFailure(out string? error, out _, out Workbook? book) == true || book.Sheet("Budget").IsSuccess(out Worksheet? sheet) == false)
+{
+    return;
+}
+
+Console.WriteLine(sheet.View.Zoom);   // as the file has it: 100
+sheet.View = sheet.View with { ShowGridLines = false, Zoom = 120, TabColor = "#00B050", ActiveCell = new CellAddress(1, 1) };
+
+// A cell that links to another sheet, and one that links to the web. The cells keep their values.
+sheet["F1"] = Cell.Of("Go to the summary").Underline().FontColor("#0563C1");
+Result linked = sheet.AddHyperlink("F1", Hyperlink.ToCell("Summary", "A1"));
+sheet.AddHyperlink(new CellAddress(1, 5), Hyperlink.ToUrl("https://example.com/budget") with { Tooltip = "The budget online" });
+
+await book.SaveAsync("budget-view.xlsx");
+```
+
 ## The API at a glance
 
 | Type | What it is | Scenario |
@@ -898,7 +1110,7 @@ gets its data from a connection, or a chart drawn from another workbook.
 | `KalkylMapping` | The extension methods `SheetWriter.WriteAsync(items)` and `SheetReader.ReadAsync<T>()`. | 2 |
 | `IKalkylRow<T>`, `KalkylMap<T>`, `KalkylColumnInfo` | Implemented by the generator: `T.KalkylMap` has `Columns`, `ToCells(item)` and `FromRow(row)`. Generic code can ask for `where T : IKalkylRow<T>`. | 3 |
 | `KalkylCells`, `MappedRow` | Used by the generated code; hidden from IntelliSense. | — |
-| `XlsxWriter`, `SheetWriter` | Streaming writer: `CreateAsync(path)` or `(stream, leaveOpen)`, `AddSheetAsync`, `CompleteAsync` (or `await using`); per sheet `SetColumnWidth`, `FreezePanes`, `EnableAutoFilter`, `WriteRowAsync`, `RowCount`, `IsFinished`. | 4, 5 |
+| `XlsxWriter`, `SheetWriter` | Streaming writer: `CreateAsync(path)` or `(stream, leaveOpen)`, `AddSheetAsync`, `CompleteAsync` (or `await using`); per sheet `SetColumnWidth`, `FreezePanes`, `SetView`, `EnableAutoFilter`, `WriteRowAsync`, `RowCount`, `IsFinished`, and `AddChart`, `AddPicture`, `AddShape`, `AddGroup`, `AddHyperlink`, `AddConditionalFormat`. | 4, 5, 20 |
 | `XlsxReader`, `SheetReader`, `SheetInfo`, `SheetVisibility` | Streaming reader: `OpenAsync(path or stream, limits)`, `Sheets` (`Name`, `Index`, `Visibility`: `Visible`, `Hidden`, `VeryHidden`), `Sheet(name or index)`, `ReadRowsAsync`, `Uses1904Dates`. | 6 |
 | `Row` | One row: `Index`, `Cells`, `ColumnCount`, `IsEmpty`, `row[column]`, `TryGetText`, `TryGetNumber`, `TryGetBool`, `TryGetDate`. | 6 |
 | `KalkylLimits` | `Default`, `Unlimited` and `with { MaxUncompressedBytes, MaxCells, MaxSharedStrings, MaxArrayCells, StrictZip }`. | 7 |
@@ -906,10 +1118,16 @@ gets its data from a connection, or a chart drawn from another workbook.
 | `CellValue`, `CellKind` | A value: `Text`, `Number`, `Bool`, `Date`, `Error` or `Empty`, with `TryGet…`. | 8 |
 | `Cell`, `Style`, `HorizontalAlignment`, `VerticalAlignment` | A value with a formula and a style. `Style` has `Bold`, `Italic`, `Underline`, `FontColor`, `FontSize`, `FontName`, `Background`, `NumberFormat`, `Horizontal` (`General`, `Left`, `Center`, `Right`, `Justify`), `Vertical` (`Bottom`, `Center`, `Top`) and `WrapText`. | 9 |
 | `CellAddress`, `CellRange` | A cell and a block of cells, 0-based, with Excel's notation in `Parse` and `ToString`. | 10 |
-| `Workbook`, `Worksheet` | The document model: `Create`, `OpenAsync`, `AddSheet`, `Sheet`, `Sheets`, `SaveAsync`; per sheet `sheet[row, column]`, `sheet["C2"]`, `SetValue`, `SetFormula`, `Clear`, `Rows`, `RowCount`, `ColumnCount`, widths, panes, `AutoFilter` and `Visibility`. | 11–13 |
+| `Workbook`, `Worksheet` | The document model: `Create`, `OpenAsync`, `AddSheet`, `Sheet`, `Sheets`, `SaveAsync`; per sheet `sheet[row, column]`, `sheet["C2"]`, `SetValue`, `SetFormula`, `Clear`, `Rows`, `RowCount`, `ColumnCount`, widths, panes, `View`, `AutoFilter` and `Visibility`, and the same `Add…` methods as `SheetWriter`. | 11–13, 22 |
 | `RecalculationScope`, `RecalculationReport` | `RecalculateAsync(Changed or All)` and what it found; `Workbook.Evaluate`, `Culture`, `Uses1904Dates`, `Limits`. | 14 |
-| `Chart`, `ChartSeries`, `ChartType`, `LegendPosition` | `AddChart` on both writers. Legend `None`, `Right`, `Bottom`, `Top` or `Left`. | 15 |
-| `Picture`, `PictureFormat` | `FromFileAsync`, `FromBytes`, `Format` (`Png`, `Jpeg`, `Gif`), `Width`, `Height`, `Description`; `AddPicture` on both writers. | 16 |
+| `Chart`, `ChartSeries`, `ChartType`, `LegendPosition` | `AddChart` on both writers, over cells or at `DrawingBounds`. Legend `None`, `Right`, `Bottom`, `Top` or `Left`. | 15 |
+| `ChartAxis`, `DataLabels`, `DataLabelPosition`, `MarkerStyle` | Chart styling: axes (`Visible`, `Gridlines`, `Minimum`, `Maximum`, `MajorUnit`, `NumberFormat`, `Font`), labels (`ShowValue`, `ShowPercent`, `ShowCategory`, `ShowSeriesName`, `Position`, `NumberFormat`, `Font`), markers (`None`, `Circle`, `Square`, `Diamond`, `Triangle`, `X`, `Star`, `Dash`, `Dot`, `Plus`). | 21 |
+| `Picture`, `PictureFormat` | `FromFileAsync`, `FromBytes`, `FromSvg`, `Format` (`Png`, `Jpeg`, `Gif`, `Svg`), `Width`, `Height`, `Description`, `Link`, `Transparency`, `Shadow`; `AddPicture` on both writers. | 16, 20 |
+| `Shape`, `ShapeKind`, `ShapeText`, `TextRun`, `TextFont` | A shape: `Kind` (`Rectangle`, `RoundedRectangle`, `Ellipse`, `Triangle`, `Diamond`, `Hexagon`, `RightArrow`, `LeftArrow`, `UpArrow`, `DownArrow`, `Chevron`, `Pentagon`, `Line`, `TextBox`), `CornerRadius`, `Fill`, `Outline`, `Shadow`, `InnerShadow`, `SoftEdges`, `Text` (runs, `Horizontal`, `Vertical`, `Wrap`, margins), `Rotation`, flips, `Link`, `Name`, `Description`. `TextFont` also styles chart text. | 20 |
+| `ShapeGroup`, `GroupItem`, `DrawingBounds` | Shapes and pictures as one (`Items`, `Link`); a place on the sheet in points or EMU (`FromPoints`, `FromEmu`). | 20 |
+| `Fill`, `GradientStop`, `Outline`, `LineDash`, `Shadow` | `Fill.None`, `Solid(color, transparency)`, `Gradient(angle, stops)` or `Gradient(from, to, angle)`; `Outline(color, width)` with `Dash` and `Transparency`, `Outline.None`; `Shadow` with `Color`, `Transparency`, `Blur`, `Distance`, `Angle`. For shapes and charts. | 20, 21 |
+| `Hyperlink` | `ToCell(sheet, cell)` or `ToUrl(url)`, with `Tooltip`: on a shape, a group, a picture, or a cell with `AddHyperlink`. | 20, 22 |
+| `SheetView` | `ShowGridLines`, `ShowHeaders`, `Zoom`, `TabColor`, `ActiveCell`, `RightToLeft`; `SetView` on the streaming writer, `Worksheet.View`. | 22 |
 | `ConditionalFormat`, `ComparisonOperator`, `IconSetKind` | `AddConditionalFormat` on both writers. Comparisons `Equal`, `NotEqual`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual`; 17 icon sets from `ThreeArrows` to `FiveQuarters`. | 17 |
 | `Workbook.HasMacros`, `RemoveMacros` | Find and drop a VBA project. | 18 |
 | `ActiveContent`, `Workbook.ActiveContent`, `ExternalReferences`, `RemoveActiveContent` | What can act on its own (`Macros`, `ActiveX`, `EmbeddedObjects`, `ExternalReferences`, `DataConnections`), the external links as `OpcExternalRelationship` (`SourcePart`, `Kind`, `Target`), and a save without any of it. `XlsxReader.GetActiveContentAsync` and `GetExternalReferencesAsync` on the streaming reader. | 19 |

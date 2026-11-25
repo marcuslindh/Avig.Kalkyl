@@ -15,11 +15,27 @@ internal sealed class DrawingPackage
 {
     private readonly ZipArchive archive;
     private readonly HashSet<string> paths;
+    private readonly HashSet<int> mediaNumbers = [];
 
     public DrawingPackage(ZipArchive archive, IEnumerable<string> existingPaths)
     {
         this.archive = archive;
         paths = new HashSet<string>(existingPaths, StringComparer.OrdinalIgnoreCase);
+
+        foreach (string path in paths)
+        {
+            // xl/media/image12.png: the number is taken, whatever the format.
+            if (path.StartsWith("xl/media/image", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                string rest = path["xl/media/image".Length..];
+                int dot = rest.IndexOf('.', StringComparison.Ordinal);
+
+                if (dot > 0 && int.TryParse(rest[..dot], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int number) == true)
+                {
+                    mediaNumbers.Add(number);
+                }
+            }
+        }
     }
 
     /// <summary>What a save after <see cref="Workbook.RemoveActiveContent"/> leaves out, which also applies to the drawings added to.</summary>
@@ -210,7 +226,7 @@ internal sealed class DrawingPackage
             }
 
             Picture picture = target.Image!;
-            string imagePath = Unused("xl/media/image", "." + picture.Extension);
+            string imagePath = UnusedMedia(picture.Extension);
 
             // Images are compressed already; deflating them again costs time and saves nothing.
             // An SVG is text and does shrink.
@@ -264,6 +280,23 @@ internal sealed class DrawingPackage
         }
 
         string path = prefix + SheetXml.Text(number) + suffix;
+        paths.Add(path);
+
+        return path;
+    }
+
+    /// <summary>A media path whose number no image of any format has, as Excel numbers them: image1.png, image2.svg.</summary>
+    private string UnusedMedia(string extension)
+    {
+        int number = 1;
+
+        while (paths.Contains("xl/media/image" + SheetXml.Text(number) + "." + extension) == true || mediaNumbers.Contains(number) == true)
+        {
+            number++;
+        }
+
+        mediaNumbers.Add(number);
+        string path = "xl/media/image" + SheetXml.Text(number) + "." + extension;
         paths.Add(path);
 
         return path;

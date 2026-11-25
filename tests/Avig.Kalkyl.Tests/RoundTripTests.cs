@@ -67,9 +67,41 @@ public class RoundTripTests
             customers.AddConditionalFormat("C2:C4", ConditionalFormat.IconSet(IconSetKind.ThreeArrows));
             Assert.True(customers.AddChart(new Chart(ChartType.Column) { Title = "Belopp", Series = [new ChartSeries("Belopp", "C2:C3", "A2:A3")] }, "F2:L16").IsSuccess(out _, out _));
             customers.AddPicture(DrawingTests.PngPicture(), "N2");
+            customers.AddHyperlink("A2", Hyperlink.ToUrl("https://example.com/"));
+            customers.AddHyperlink("A3", Hyperlink.ToCell("Andra", "A1") with { Tooltip = "Andra bladet" });
+            customers.AddShape(new Shape(ShapeKind.RoundedRectangle) { CornerRadius = 0.2, Fill = Fill.Gradient("#2384F9", "#605776", 45), Outline = new Outline("#1F2940") { Dash = LineDash.Dash }, Shadow = new Shadow(), InnerShadow = new Shadow(), SoftEdges = 1, Rotation = 10, Text = new ShapeText([new TextRun("Kort\n"), new TextRun("24", new TextFont { Bold = true, Size = 20, Color = "#FFFFFF", Name = "Segoe UI" })]) { MarginLeft = 5 }, Link = Hyperlink.ToCell("Andra", "A1") }, DrawingBounds.FromPoints(600, 20, 160, 90));
+            customers.AddShape(new Shape(ShapeKind.Line) { Outline = new Outline("#000000", 2), FlipHorizontal = true }, "N20:P22");
+            customers.AddGroup(new ShapeGroup([GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText("Grupp") }, DrawingBounds.FromPoints(0, 0, 80, 20)), GroupItem.Of(DrawingTests.PngPicture() with { Transparency = 0.5, Shadow = new Shadow() }, DrawingBounds.FromPoints(80, 0, 20, 20))]) { Link = Hyperlink.ToUrl("https://example.com/") }, "N24:P26");
+            Assert.True(Picture.FromSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"/>"u8).IsSuccess(out Picture? svg));
+            customers.AddPicture(svg with { Link = Hyperlink.ToCell("Tredje", "B2") }, DrawingBounds.FromPoints(600, 120, 32, 32));
+            ChartSeries plan = new("Plan", "C2:C3", "A2:A3") { Type = ChartType.Line, Smooth = true, Marker = MarkerStyle.Square, MarkerSize = 8, Outline = new Outline("#E1541C", 2), SecondaryAxis = true, DataLabels = new DataLabels { Position = DataLabelPosition.Above, NumberFormat = "0.0" } };
+
+            Chart combination = new(ChartType.Column)
+            {
+                Series = [new ChartSeries("Belopp", "C2:C3", "A2:A3") { PointColors = ["#00C5AE"], Fill = Fill.Solid("#3A4A6B", 0.2), Shadow = new Shadow() }, plan],
+                GapWidth = 50,
+                Overlap = 20,
+                Background = Fill.None,
+                PlotBackground = Fill.Gradient("#FFFFFF", "#EEEEEE"),
+                Border = Outline.None,
+                Font = new TextFont { Size = 9 },
+                TitleFont = new TextFont { Bold = true },
+                LegendFont = new TextFont { Color = "#777777" },
+                Title = "Kombination",
+                CategoryAxis = new ChartAxis { Line = Outline.None, Gridlines = true, NumberFormat = "@" },
+                ValueAxis = new ChartAxis { Minimum = -10, Maximum = 2000, MajorUnit = 500, GridlineOutline = new Outline("#DDDDDD", 0.5), Font = new TextFont { Italic = true } },
+                SecondaryValueAxis = new ChartAxis { Visible = false },
+                DataLabels = new DataLabels { ShowCategory = true, ShowSeriesName = true },
+                VaryColors = false,
+                RoundedCorners = true,
+            };
+
+            Assert.True(customers.AddChart(combination, DrawingBounds.FromPoints(600, 160, 300, 200)).IsSuccess(out _, out _));
+            Assert.True(customers.AddChart(new Chart(ChartType.Doughnut) { Series = [new ChartSeries("Belopp", "C2:C3", "A2:A3") { PointColors = ["#00C5AE", "#2E3850"] }], HoleSize = 75, FirstSliceAngle = 90, DataLabels = new DataLabels { ShowPercent = true } }, "N30:R40").IsSuccess(out _, out _));
 
             SheetWriter second = await TestFiles.AddSheetAsync(writer, "Andra");
             second.FreezePanes(2);
+            second.SetView(new SheetView { ShowGridLines = false, ShowHeaders = false, Zoom = 75, TabColor = "#C00000", ActiveCell = new CellAddress(3, 1), RightToLeft = true });
             await second.WriteRowAsync(["bara rader frysta"]);
 
             SheetWriter third = await TestFiles.AddSheetAsync(writer, "Tredje");
