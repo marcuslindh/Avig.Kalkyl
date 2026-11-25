@@ -29,8 +29,17 @@ dotnet add package Avig.Kalkyl
 
 Every example below is a test in `tests/Avig.Kalkyl.Tests/ReadmeExamples.cs` that runs on every
 build, and a test checks that the code here is the same as there. They need `using Avig;` and
-`using Avig.Kalkyl;`, and follow this repository's style (explicit types, `== true`), which your
-code does not have to.
+`using Avig.Kalkyl;`, and the examples with shapes, pictures or chart styling also
+`using Avig.OpenXml.Drawing;`, and follow this repository's style (explicit types, `== true`),
+which your code does not have to.
+
+The drawing types (`Shape`, `Fill`, `Outline`, `Shadow`, `TextFont`, `ShapeText`, `Picture`,
+`ShapeGroup`, `DrawingBounds`, `Hyperlink`, `ChartType`, `ChartAxis`, `DataLabels` …) are
+DrawingML, the same in Excel, PowerPoint and Word, and live in the namespace
+`Avig.OpenXml.Drawing` of the package Avig.OpenXml, which Avig.Kalkyl depends on and Avig.Ord and
+Avig.Bildspel share. What is Excel's stays here: the anchors to cells, the drawing part, charts
+whose series point to cells (`Chart`, `ChartSeries`), `Hyperlink.ToCell`, pivot tables and
+slicers.
 
 ## Which way in?
 
@@ -984,7 +993,7 @@ await using (writer)
             new TextRun("24", new TextFont { Size = 26, Bold = true, Color = "#FFFFFF" }),
         ])
         {
-            Horizontal = HorizontalAlignment.Left,
+            Horizontal = TextAlignment.Left,
             MarginLeft = 16,
         },
         Link = Hyperlink.ToCell("Data", "A1") with { Tooltip = "Open the data" },
@@ -1009,7 +1018,7 @@ await using (writer)
     [
         GroupItem.Of(new Shape(ShapeKind.RoundedRectangle) { Fill = Fill.Solid("#232D45"), Outline = Outline.None }, DrawingBounds.FromPoints(0, 0, 145, 40)),
         GroupItem.Of(svg with { Description = "Data" }, DrawingBounds.FromPoints(12, 9, 22, 22)),
-        GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText("Data", new TextFont { Color = "#FFFFFF" }) { Horizontal = HorizontalAlignment.Left } }, DrawingBounds.FromPoints(42, 0, 100, 40)),
+        GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText("Data", new TextFont { Color = "#FFFFFF" }) { Horizontal = TextAlignment.Left } }, DrawingBounds.FromPoints(42, 0, 100, 40)),
     ])
     {
         Link = Hyperlink.ToCell("Data", "A1"),
@@ -1259,12 +1268,12 @@ the Values field on rows, and timelines are not supported; files that have them 
 | `Workbook`, `Worksheet` | The document model: `Create`, `OpenAsync`, `AddSheet`, `Sheet`, `Sheets`, `SaveAsync`; per sheet `sheet[row, column]`, `sheet["C2"]`, `SetValue`, `SetFormula`, `Clear`, `Rows`, `RowCount`, `ColumnCount`, widths, panes, `View`, `AutoFilter` and `Visibility`, and the same `Add…` methods as `SheetWriter`. | 11–13, 22 |
 | `RecalculationScope`, `RecalculationReport` | `RecalculateAsync(Changed or All)` and what it found; `Workbook.Evaluate`, `Culture`, `Uses1904Dates`, `Limits`. | 14 |
 | `Chart`, `ChartSeries`, `ChartType`, `LegendPosition` | `AddChart` on both writers, over cells or at `DrawingBounds`. Per chart `Title`, `Stacked`, axis titles, `Legend` (`None`, `Right`, `Bottom`, `Top`, `Left`), `HoleSize`, `FirstSliceAngle`, `GapWidth`, `Overlap`, `VaryColors`, `RoundedCorners`, `Background`, `PlotBackground`, `Border`, fonts and axes; per series `Type` (combination charts), `SecondaryAxis`, `Fill`, `Outline`, `Shadow`, `PointColors`, `Smooth`, `Marker`, `MarkerSize` and `DataLabels`. | 15, 21 |
-| `ChartAxis`, `DataLabels`, `DataLabelPosition`, `MarkerStyle` | Chart styling: axes (`Visible`, `Gridlines`, `Minimum`, `Maximum`, `MajorUnit`, `NumberFormat`, `Font`), labels (`ShowValue`, `ShowPercent`, `ShowCategory`, `ShowSeriesName`, `Position`, `NumberFormat`, `Font`), markers (`None`, `Circle`, `Square`, `Diamond`, `Triangle`, `X`, `Star`, `Dash`, `Dot`, `Plus`). | 21 |
-| `Picture`, `PictureFormat` | `FromFileAsync`, `FromBytes`, `FromSvg`, `Format` (`Png`, `Jpeg`, `Gif`, `Svg`), `Width`, `Height`, `Description`, `Link`, `Transparency`, `Shadow`; `AddPicture` on both writers. | 16, 20 |
-| `Shape`, `ShapeKind`, `ShapeText`, `TextRun`, `TextFont` | A shape: `Kind` (`Rectangle`, `RoundedRectangle`, `Ellipse`, `Triangle`, `Diamond`, `Hexagon`, `RightArrow`, `LeftArrow`, `UpArrow`, `DownArrow`, `Chevron`, `Pentagon`, `Line`, `TextBox`), `CornerRadius`, `Fill`, `Outline`, `Shadow`, `InnerShadow`, `SoftEdges`, `Text` (runs, `Horizontal`, `Vertical`, `Wrap`, margins), `Rotation`, flips, `Link`, `Name`, `Description`. `TextFont` also styles chart text. | 20 |
-| `ShapeGroup`, `GroupItem`, `DrawingBounds` | Shapes and pictures as one (`Items`, `Link`); a place on the sheet in points or EMU (`FromPoints`, `FromEmu`). | 20 |
-| `Fill`, `GradientStop`, `Outline`, `LineDash`, `Shadow` | `Fill.None`, `Solid(color, transparency)`, `Gradient(angle, stops)` or `Gradient(from, to, angle)`; `Outline(color, width)` with `Dash` and `Transparency`, `Outline.None`; `Shadow` with `Color`, `Transparency`, `Blur`, `Distance`, `Angle`. For shapes and charts. | 20, 21 |
-| `Hyperlink` | `ToCell(sheet, cell)` or `ToUrl(url)`, with `Tooltip`: on a shape, a group, a picture, or a cell with `AddHyperlink`. | 20, 22 |
+| `ChartAxis`, `DataLabels`, `DataLabelPosition`, `MarkerStyle` (Avig.OpenXml.Drawing) | Chart styling: axes (`Visible`, `Gridlines`, `Minimum`, `Maximum`, `MajorUnit`, `NumberFormat`, `Font`), labels (`ShowValue`, `ShowPercent`, `ShowCategory`, `ShowSeriesName`, `Position`, `NumberFormat`, `Font`), markers (`None`, `Circle`, `Square`, `Diamond`, `Triangle`, `X`, `Star`, `Dash`, `Dot`, `Plus`). | 21 |
+| `Picture`, `PictureFormat` (Avig.OpenXml.Drawing) | `FromFileAsync`, `FromBytes`, `FromSvg`, `Format` (`Png`, `Jpeg`, `Gif`, `Svg`), `Width`, `Height`, `Description`, `Link`, `Transparency`, `Shadow`; `AddPicture` on both writers. | 16, 20 |
+| `Shape`, `ShapeKind`, `ShapeText`, `TextRun`, `TextFont`, `TextAlignment`, `TextAnchor` (Avig.OpenXml.Drawing) | A shape: `Kind` (`Rectangle`, `RoundedRectangle`, `Ellipse`, `Triangle`, `Diamond`, `Hexagon`, `RightArrow`, `LeftArrow`, `UpArrow`, `DownArrow`, `Chevron`, `Pentagon`, `Line`, `TextBox`), or any other preset with `Shape.FromPreset("star5")`, `CornerRadius`, `Fill`, `Outline`, `Shadow`, `InnerShadow`, `SoftEdges`, `Text` (runs, `Horizontal`, `Vertical`, `Wrap`, margins), `Rotation`, flips, `Link`, `Name`, `Description`. `TextFont` also styles chart text. | 20 |
+| `ShapeGroup`, `GroupItem`, `DrawingBounds` (Avig.OpenXml.Drawing) | Shapes and pictures as one (`Items`, `Link`); a place on the sheet in points, EMU or `Length` (`FromPoints`, `FromEmu`). | 20 |
+| `Fill`, `GradientStop`, `FillPattern`, `Outline`, `LineDash`, `Shadow` (Avig.OpenXml.Drawing) | `Fill.None`, `Solid(color, transparency)`, `Gradient(angle, stops)` or `Gradient(from, to, angle)`, `Pattern(pattern, foreground, background)`, `Picture(picture)` (shapes only); `Outline(color, width)` with `Dash` and `Transparency`, `Outline.None`; `Shadow` with `Color`, `Transparency`, `Blur`, `Distance`, `Angle`. For shapes and charts. | 20, 21 |
+| `Hyperlink` (Avig.OpenXml.Drawing), `HyperlinkExtensions` | `Hyperlink.ToCell(sheet, cell)` (from Avig.Kalkyl) or `ToUrl(url)`, with `Tooltip`: on a shape, a group, a picture, or a cell with `AddHyperlink`. | 20, 22 |
 | `SheetView` | `ShowGridLines`, `ShowHeaders`, `Zoom`, `TabColor`, `ActiveCell`, `RightToLeft`; `SetView` on the streaming writer, `Worksheet.View`. | 22 |
 | `ConditionalFormat`, `ComparisonOperator`, `IconSetKind` | `AddConditionalFormat` on both writers. Comparisons `Equal`, `NotEqual`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual`; 17 icon sets from `ThreeArrows` to `FiveQuarters`. | 17 |
 | `Workbook.HasMacros`, `RemoveMacros` | Find and drop a VBA project. | 18 |

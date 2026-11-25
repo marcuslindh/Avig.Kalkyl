@@ -730,7 +730,7 @@ public sealed class ReadmeExamples : IDisposable
                     new TextRun("24", new TextFont { Size = 26, Bold = true, Color = "#FFFFFF" }),
                 ])
                 {
-                    Horizontal = HorizontalAlignment.Left,
+                    Horizontal = TextAlignment.Left,
                     MarginLeft = 16,
                 },
                 Link = Hyperlink.ToCell("Data", "A1") with { Tooltip = "Open the data" },
@@ -755,7 +755,7 @@ public sealed class ReadmeExamples : IDisposable
             [
                 GroupItem.Of(new Shape(ShapeKind.RoundedRectangle) { Fill = Fill.Solid("#232D45"), Outline = Outline.None }, DrawingBounds.FromPoints(0, 0, 145, 40)),
                 GroupItem.Of(svg with { Description = "Data" }, DrawingBounds.FromPoints(12, 9, 22, 22)),
-                GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText("Data", new TextFont { Color = "#FFFFFF" }) { Horizontal = HorizontalAlignment.Left } }, DrawingBounds.FromPoints(42, 0, 100, 40)),
+                GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText("Data", new TextFont { Color = "#FFFFFF" }) { Horizontal = TextAlignment.Left } }, DrawingBounds.FromPoints(42, 0, 100, 40)),
             ])
             {
                 Link = Hyperlink.ToCell("Data", "A1"),

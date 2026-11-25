@@ -219,8 +219,8 @@ internal static class DashboardWorkbook
         {
             Text = new ShapeText([new TextRun("PROJECT\n", new TextFont { Bold = true, Size = 13, Color = "#FFFFFF" }), new TextRun("DASHBOARD", new TextFont { Bold = true, Size = 13, Color = "#8BFFF7" })])
             {
-                Horizontal = HorizontalAlignment.Left,
-                Vertical = VerticalAlignment.Center,
+                Horizontal = TextAlignment.Left,
+                Vertical = TextAnchor.Center,
             },
             Description = "Project dashboard",
         }, 22, 22, 145, 50);
@@ -243,7 +243,7 @@ internal static class DashboardWorkbook
             [
                 GroupItem.Of(new Shape(ShapeKind.RoundedRectangle) { Fill = button, Outline = Outline.None, CornerRadius = 0.25 }, DrawingBounds.FromPoints(0, 0, 145, 40)),
                 GroupItem.Of(icon, DrawingBounds.FromPoints(12, 9, 22, 22)),
-                GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText(Pages[index], white) { Horizontal = HorizontalAlignment.Left, Vertical = VerticalAlignment.Center } }, DrawingBounds.FromPoints(42, 0, 100, 40)),
+                GroupItem.Of(new Shape(ShapeKind.TextBox) { Text = new ShapeText(Pages[index], white) { Horizontal = TextAlignment.Left, Vertical = TextAnchor.Center } }, DrawingBounds.FromPoints(42, 0, 100, 40)),
             ])
             {
                 Link = Hyperlink.ToCell(Pages[index], "A1") with { Tooltip = "Go to " + Pages[index] },
@@ -275,7 +275,7 @@ internal static class DashboardWorkbook
                 CornerRadius = 0.12,
                 Text = new ShapeText([new TextRun(cards[index].Title + "\n", new TextFont { Size = 11, Color = "#E6ECF5" }), new TextRun(cards[index].Value, new TextFont { Size = 26, Bold = true, Color = "#FFFFFF" })])
                 {
-                    Horizontal = HorizontalAlignment.Left,
+                    Horizontal = TextAlignment.Left,
                     MarginLeft = 16,
                 },
                 Name = cards[index].Title + " card",

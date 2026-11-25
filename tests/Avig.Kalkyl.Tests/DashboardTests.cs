@@ -77,8 +77,8 @@ public class DashboardTests
             Description = "Projects card",
             Text = new ShapeText([new TextRun("PROJECT\n", new TextFont { Bold = true, Size = 12, Color = "#FFFFFF" }), new TextRun("DASHBOARD", new TextFont { Bold = true, Size = 12, Color = "#8BFFF7", Name = "Segoe UI" })])
             {
-                Horizontal = HorizontalAlignment.Right,
-                Vertical = VerticalAlignment.Bottom,
+                Horizontal = TextAlignment.Right,
+                Vertical = TextAnchor.Bottom,
                 Wrap = false,
                 MarginLeft = 10,
                 MarginTop = 0,

@@ -4,6 +4,8 @@ Testfall FUN-04 i `docs/testplan.md`. Byggmaskinen har inte Excel, så det här 
 testet som en person gör. Det tar cirka 40 minuter. Gör det före en release och efter
 ändringar i `DocumentSaver`, `XlsxWriter`, `Internal/CellXml.cs` eller ritningarna och reglerna
 (`DrawingXml`, `DrawingPackage`, `ConditionalFormatXml`) och pivottabellerna (`PivotXml`, `PivotRender`, `PivotPackage`).
+Det gäller också en ny version av Avig.OpenXml, där DrawingML-lagret (`DrawingWriter`, `ChartWriter`)
+skriver allt inuti ankarna och diagramdelarna.
 
 ## 1. Skapa filerna
 

@@ -29,6 +29,7 @@
   <ItemGroup>
     <Using Include="Avig" />
     <Using Include="Avig.Kalkyl" />
+    <Using Include="Avig.OpenXml.Drawing" />
   </ItemGroup>
 
 </Project>

@@ -51,7 +51,7 @@ internal sealed class DrawingPackage
     public async Task<string> WriteDrawingAsync(IReadOnlyList<DrawingItem> items, CancellationToken cancellationToken)
     {
         string drawingPath = Unused("xl/drawings/drawing", ".xml");
-        DrawingContext context = new([], 2);
+        DrawingContext context = DrawingXml.NewContext([], 2);
         await WritePartAsync(drawingPath, xml => DrawingXml.WriteDrawingAsync(xml, items, context), cancellationToken);
         List<PartRelationship> relationships = await WriteTargetsAsync(context, cancellationToken);
         await WritePartAsync(Ooxml.RelationshipsPath(drawingPath), xml => DrawingXml.WriteRelationshipsAsync(xml, relationships), cancellationToken);
@@ -83,7 +83,7 @@ internal sealed class DrawingPackage
             throw new InvalidDataException($"{KalkylError.DamagedPrefix}: the drawing {drawingPath} is not valid XML ({exception.Message}), so nothing can be added to it.", exception);
         }
 
-        DrawingContext context = new(usedIds, firstShapeId);
+        DrawingContext context = DrawingXml.NewContext(usedIds, firstShapeId);
 
         await WritePartAsync(drawingPath, async xml =>
         {
@@ -203,7 +203,7 @@ internal sealed class DrawingPackage
             if (target.Chart is not null)
             {
                 string chartPath = Unused("xl/charts/chart", ".xml");
-                await WritePartAsync(chartPath, xml => ChartXml.WriteChartAsync(xml, target.Chart), cancellationToken);
+                await WritePartAsync(chartPath, xml => ChartXml.WriteChartAsync(xml, (DrawingItem)target.Chart), cancellationToken);
                 relationships.Add(new PartRelationship(target.Id, DrawingXml.ChartRelationship, "/" + chartPath));
                 Overrides.Add(("/" + chartPath, DrawingXml.ChartContentType));
 

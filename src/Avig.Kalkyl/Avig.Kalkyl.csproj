@@ -33,11 +33,16 @@
 
   <ItemGroup>
     <PackageReference Include="Avig.Result" Version="1.0.2" />
-    <PackageReference Include="Avig.OpenXml" Version="0.1.6" />
+    <PackageReference Include="Avig.OpenXml" Version="0.2.0" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The DrawingML types (Shape, Fill, Picture, ChartAxis ...) live in Avig.OpenXml. -->
+    <Using Include="Avig.OpenXml.Drawing" />
   </ItemGroup>
 
   <ItemGroup>

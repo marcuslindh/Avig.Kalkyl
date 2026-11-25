@@ -77,7 +77,7 @@ public static class Invoice
                 new TextRun("Belysning och ljusdesign", new TextFont { Name = FontName, Size = 9, Color = Grey }),
             ])
             {
-                Horizontal = HorizontalAlignment.Left,
+                Horizontal = TextAlignment.Left,
                 MarginLeft = 0,
             },
         };
@@ -194,7 +194,7 @@ public static class Invoice
                 new TextRun("Ange OCR-numret när du betalar. Frågor om fakturan: faktura@nordljus.example", new TextFont { Name = FontName, Size = 8, Color = Ink }),
             ])
             {
-                Horizontal = HorizontalAlignment.Left,
+                Horizontal = TextAlignment.Left,
                 MarginLeft = 10,
                 MarginRight = 10,
             },

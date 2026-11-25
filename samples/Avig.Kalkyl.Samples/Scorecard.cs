@@ -73,7 +73,7 @@ public static class Scorecard
                 new TextRun("Q3 2026, all teams. Green is on target, amber close, red needs attention.", new TextFont { Name = FontName, Size = 9, Color = "#C7D2FE" }),
             ])
             {
-                Horizontal = HorizontalAlignment.Left,
+                Horizontal = TextAlignment.Left,
                 MarginLeft = 0,
             },
         };
@@ -155,7 +155,7 @@ public static class Scorecard
             };
 
             Check(sheet.AddChart(gauge, DrawingBounds.FromPoints(gaugeLeft, gaugeTop, size, size)));
-            Shape figure = Label(Gauges[index].Shown, 20, Navy, bold: true, HorizontalAlignment.Center);
+            Shape figure = Label(Gauges[index].Shown, 20, Navy, bold: true, TextAlignment.Center);
             Check(sheet.AddShape(figure, DrawingBounds.FromPoints(gaugeLeft, gaugeTop + (size / 2) - 15, size, 30)));
         }
     }

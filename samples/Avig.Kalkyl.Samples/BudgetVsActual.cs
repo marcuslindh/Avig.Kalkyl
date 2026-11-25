@@ -148,7 +148,7 @@ public static class BudgetVsActual
                     new TextRun(note, new TextFont { Name = FontName, Size = 8, Color = Grey }),
                 ])
                 {
-                    Horizontal = HorizontalAlignment.Left,
+                    Horizontal = TextAlignment.Left,
                     MarginLeft = 10,
                 },
                 Description = title + ": " + value,

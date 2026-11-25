@@ -56,7 +56,7 @@ internal readonly record struct DrawingAnchor(CellAddress From, CellRange? Area,
 
     public static DrawingAnchor At(DrawingBounds bounds)
     {
-        return new DrawingAnchor(default, null, bounds.Width, bounds.Height) { Absolute = bounds };
+        return new DrawingAnchor(default, null, bounds.Width.Emu, bounds.Height.Emu) { Absolute = bounds };
     }
 
     public static DrawingAnchor Over(CellRange area)
@@ -65,8 +65,8 @@ internal readonly record struct DrawingAnchor(CellAddress From, CellRange? Area,
     }
 }
 
-/// <summary>A chart, a picture, a shape or a group on a sheet, with a chart's series references already resolved to formulas.</summary>
-internal sealed record DrawingItem(Chart? Chart, IReadOnlyList<ResolvedSeries> Series, Picture? Picture, DrawingAnchor Anchor)
+/// <summary>A chart, a picture, a shape or a group on a sheet; a chart comes with its chart part, the series' references already resolved to formulas.</summary>
+internal sealed record DrawingItem(Chart? Chart, ChartSpace? ChartSpace, Picture? Picture, DrawingAnchor Anchor)
 {
     public Shape? Shape { get; init; }
 
@@ -75,8 +75,6 @@ internal sealed record DrawingItem(Chart? Chart, IReadOnlyList<ResolvedSeries> S
     /// <summary>The name of the slicer the anchor holds, when it holds one rather than a chart, a picture, a shape or a group.</summary>
     public string? Slicer { get; init; }
 }
-
-internal sealed record ResolvedSeries(ChartSeries Series, string Values, string? Categories);
 
 /// <summary>
 /// The conditional formats, charts and pictures added to one sheet. Shared by
@@ -119,19 +117,19 @@ internal sealed class SheetExtras
     public void AddShape(Shape shape, DrawingAnchor anchor)
     {
         ArgumentNullException.ThrowIfNull(shape);
-        drawings.Add(new DrawingItem(null, [], null, anchor) { Shape = shape });
+        drawings.Add(new DrawingItem(null, null, null, anchor) { Shape = shape });
     }
 
     public void AddGroup(ShapeGroup group, DrawingAnchor anchor)
     {
         ArgumentNullException.ThrowIfNull(group);
-        drawings.Add(new DrawingItem(null, [], null, anchor) { Group = group });
+        drawings.Add(new DrawingItem(null, null, null, anchor) { Group = group });
     }
 
     public void AddPicture(Picture picture, DrawingBounds bounds)
     {
         ArgumentNullException.ThrowIfNull(picture);
-        drawings.Add(new DrawingItem(null, [], picture, DrawingAnchor.At(bounds)));
+        drawings.Add(new DrawingItem(null, null, picture, DrawingAnchor.At(bounds)));
     }
 
     public void AddConditionalFormat(CellRange range, ConditionalFormat format)
@@ -158,8 +156,6 @@ internal sealed class SheetExtras
 
         chart.Validate();
 
-        List<ResolvedSeries> resolved = [];
-
         foreach (ChartSeries series in chart.Series)
         {
             foreach (SheetReference reference in new[] { series.Values }.Concat(Optional(series.Categories)))
@@ -169,18 +165,9 @@ internal sealed class SheetExtras
                     return Result.NotFound($"The chart refers to the sheet '{reference.Sheet}', which the workbook does not have.");
                 }
             }
-
-            string? categories = null;
-
-            if (series.Categories is SheetReference reference2)
-            {
-                categories = reference2.ToFormula(ownSheet);
-            }
-
-            resolved.Add(new ResolvedSeries(series, series.Values.ToFormula(ownSheet), categories));
         }
 
-        drawings.Add(new DrawingItem(chart, resolved, null, anchor));
+        drawings.Add(new DrawingItem(chart, chart.ToChartSpace(ownSheet), null, anchor));
 
         return Result.Success();
     }
@@ -188,13 +175,13 @@ internal sealed class SheetExtras
     /// <summary>Adds the anchor of a slicer; the slicer itself is written with the pivot tables.</summary>
     public void AddSlicer(string name, CellRange area)
     {
-        drawings.Add(new DrawingItem(null, [], null, new DrawingAnchor(area.First, area, 0, 0)) { Slicer = name });
+        drawings.Add(new DrawingItem(null, null, null, new DrawingAnchor(area.First, area, 0, 0)) { Slicer = name });
     }
 
     public void AddPicture(Picture picture, CellRange area)
     {
         ArgumentNullException.ThrowIfNull(picture);
-        drawings.Add(new DrawingItem(null, [], picture, DrawingAnchor.Over(area)));
+        drawings.Add(new DrawingItem(null, null, picture, DrawingAnchor.Over(area)));
     }
 
     public void AddPicture(Picture picture, CellAddress topLeft, double scale)
@@ -209,7 +196,7 @@ internal sealed class SheetExtras
         // ST_PositiveCoordinate ends at 27 273 042 316 900 EMU.
         long width = Math.Clamp((long)Math.Round(picture.Width * EmuPerPixel * scale), 1, 27_273_042_316_900);
         long height = Math.Clamp((long)Math.Round(picture.Height * EmuPerPixel * scale), 1, 27_273_042_316_900);
-        drawings.Add(new DrawingItem(null, [], picture, new DrawingAnchor(topLeft, null, width, height)));
+        drawings.Add(new DrawingItem(null, null, picture, new DrawingAnchor(topLeft, null, width, height)));
     }
 
     private static IEnumerable<SheetReference> Optional(SheetReference? reference)

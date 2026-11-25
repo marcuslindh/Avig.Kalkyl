@@ -65,8 +65,8 @@ public static class ProjectPlan
                 new TextRun("Project plan, autumn 2026. Bars fill with progress; diamonds are milestones.", new TextFont { Name = FontName, Size = 9, Color = Grey }),
             ])
             {
-                Horizontal = HorizontalAlignment.Left,
-                Vertical = VerticalAlignment.Top,
+                Horizontal = TextAlignment.Left,
+                Vertical = TextAnchor.Top,
                 MarginLeft = 0,
                 MarginTop = 0,
             },

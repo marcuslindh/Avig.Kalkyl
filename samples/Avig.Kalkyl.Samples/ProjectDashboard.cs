@@ -181,8 +181,8 @@ public static class ProjectDashboard
         {
             Text = new ShapeText([new TextRun("PORTFOLIO\n", new TextFont { Name = FontName, Bold = true, Size = 13, Color = "#FFFFFF" }), new TextRun("DASHBOARD", new TextFont { Name = FontName, Bold = true, Size = 13, Color = Accent })])
             {
-                Horizontal = HorizontalAlignment.Left,
-                Vertical = VerticalAlignment.Center,
+                Horizontal = TextAlignment.Left,
+                Vertical = TextAnchor.Center,
                 MarginLeft = 0,
             },
             Description = "Portfolio dashboard",
@@ -227,7 +227,7 @@ public static class ProjectDashboard
             CornerRadius = 0.12,
             Text = new ShapeText([new TextRun("Need help?\n", new TextFont { Name = FontName, Size = 10, Bold = true, Color = "#FFFFFF" }), new TextRun("Open the documentation", new TextFont { Name = FontName, Size = 8.5, Color = Accent })])
             {
-                Horizontal = HorizontalAlignment.Left,
+                Horizontal = TextAlignment.Left,
                 MarginLeft = 12,
             },
             Link = Hyperlink.ToUrl("https://learn.microsoft.com/office/") with { Tooltip = "Documentation" },
@@ -239,7 +239,7 @@ public static class ProjectDashboard
         {
             Text = new ShapeText([new TextRun("Portfolio overview\n", new TextFont { Name = FontName, Size = 18, Bold = true, Color = "#FFFFFF" }), new TextRun("All active projects, updated 25 November 2026", new TextFont { Name = FontName, Size = 9, Color = Muted })])
             {
-                Horizontal = HorizontalAlignment.Left,
+                Horizontal = TextAlignment.Left,
                 MarginLeft = 0,
             },
         };
@@ -282,7 +282,7 @@ public static class ProjectDashboard
                     new TextRun(cards[index].Change, new TextFont { Name = FontName, Size = 8.5, Color = "#E6ECF5" }),
                 ])
                 {
-                    Horizontal = HorizontalAlignment.Left,
+                    Horizontal = TextAlignment.Left,
                     MarginLeft = 16,
                 },
                 Name = cards[index].Title + " card",
@@ -351,8 +351,8 @@ public static class ProjectDashboard
         };
 
         Check(sheet.AddChart(gauge, DrawingBounds.FromPoints(834, 194, 342, 228)));
-        Check(sheet.AddShape(Label("72 %", 30, "#FFFFFF", bold: true, HorizontalAlignment.Center), DrawingBounds.FromPoints(945, 300, 120, 40)));
-        Check(sheet.AddShape(Label("of planned work done", 9, Muted, horizontal: HorizontalAlignment.Center), DrawingBounds.FromPoints(925, 338, 160, 16)));
+        Check(sheet.AddShape(Label("72 %", 30, "#FFFFFF", bold: true, TextAlignment.Center), DrawingBounds.FromPoints(945, 300, 120, 40)));
+        Check(sheet.AddShape(Label("of planned work done", 9, Muted, horizontal: TextAlignment.Center), DrawingBounds.FromPoints(925, 338, 160, 16)));
         Shape legend = new(ShapeKind.TextBox)
         {
             Text = new ShapeText(

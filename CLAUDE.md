@@ -51,7 +51,8 @@ vara verifierat genom sabotage (tabellen i README:n).
   Testerna får använda vad de vill (DocumentFormat.OpenXml används för schemavalidering).
 - **Paketlagret finns i Avig.OpenXml** (`G:\OneDrive\SkunkWorks\Prod\Lib\Avig.OpenXml`), som
   delas med Avig.Ord: zip-kontrollerna, storleksgränserna, XmlReader med djupgräns, relationer
-  och sökvägar. `XmlParts` och `Ooxml` är tunna omslag kring det. Ett fel där rättas i
+  och sökvägar, och från 0.2.0 också DrawingML-lagret och `Length` (se nedan). `XmlParts` och
+  `Ooxml` är tunna omslag kring paketlagret. Ett fel där rättas i
   Avig.OpenXml, och då ska både Kalkyls och Ords tester köras. Paketet är 0.x i
   `G:\LocalNugetRepo` (se `nuget.config`) tills det släpps med Kalkyl 1.0.0; det måste ligga på
   nuget.org innan en tagg pushas, eftersom publiceringsflödet inte når G:\.
@@ -97,15 +98,28 @@ vara verifierat genom sabotage (tabellen i README:n).
   den som finns, och nya regler läggs efter de befintliga med högre `priority`. Regelstilarna
   blir `dxf`-poster i `StyleRegistry`. Strict OOXML får inga ritningar. Testerna finns i
   `DrawingTests.cs`; Excel-checkfil 10–12 visar dem i riktiga Excel.
+- **DrawingML ligger i Avig.OpenXml** (namnrymden `Avig.OpenXml.Drawing`, delad med Avig.Ord och
+  Avig.Bildspel): `Shape`, `ShapeKind`, `Fill`, `GradientStop`, `Outline`, `Shadow`, `TextFont`,
+  `TextRun`, `ShapeText` (med `TextAlignment`/`TextAnchor`, inte Kalkyls `HorizontalAlignment`),
+  `Hyperlink`, `DrawingBounds` (i `Length`), `ShapeGroup`, `GroupItem`, `Picture` och diagrammens
+  stil (`ChartType`, `ChartAxis`, `DataLabels` …, och `ChartSpace`/`ChartSpaceSeries` för hela
+  diagramdelen). Skrivningen av formerna, bilderna, grupperna, diagramramen och diagramdelen görs
+  av `DrawingWriter` och `ChartWriter` där, och `DrawingContext` samlar id:n och relationer.
+  Kalkyl behåller det Excel-specifika: ankarna, ritningsdelen, `Chart` och `ChartSeries` (serier
+  som pekar på celler; `Chart.ToChartSpace` gör om dem till formler på bladet), `Hyperlink.ToCell`
+  (`HyperlinkExtensions`, C# 14-tillägg), pivottabeller och utsnitt. En ändring i DrawingML görs i
+  Avig.OpenXml och testas där, i Kalkyl (tester, ExcelCheck) och i Bildspel innan den släpps.
+  Testprojekten, samples och verktygen har `<Using Include="Avig.OpenXml.Drawing" />`.
 - **Former, grupper, SVG och diagramval.** `DrawingXml` skriver ankare (cellområde, cell med
-  storlek, eller `absoluteAnchor` för `DrawingBounds`) och former, bilder och grupper;
-  `ChartXml` skriver diagramdelarna. Under skrivningen samlar `DrawingContext` id:n för former,
+  storlek, eller `absoluteAnchor` för `DrawingBounds`) och lämnar det som finns i dem till
+  `DrawingWriter` i xdr-namnrymden (`DrawingXml.Tree`); `ChartXml` lämnar diagramdelarna till
+  `ChartWriter`. Under skrivningen samlar `DrawingContext` id:n för former,
   diagram, bilder och länkar (samma bild och samma länk delar en relation), och
   `DrawingPackage` skriver delarna efter ritningen, eftersom en zip bara har en post öppen.
   Varje element skrivs i schemats ordning, som Excel kontrollerar; ett diagramval som Excel
   skulle reparera (etikettposition som typen inte tar, typer som inte går att kombinera) ger
-  `ArgumentException` i `Chart.Validate`. En länk inuti arbetsboken är relationen
-  `#'Blad'!A1` utan `TargetMode`, som Excel skriver den. `SheetView` och cellänkar skrivs av
+  `ArgumentException` i `Chart.Validate` (som går via `ChartSpace.Validate`). En länk inuti
+  arbetsboken är relationen `#'Blad'!A1` utan `TargetMode`, som Excel skriver den. `SheetView` och cellänkar skrivs av
   `SheetXml`; i en öppnad fil skrivs `sheetViews`, `sheetPr` och `hyperlinks` om med filens
   eget element som utgångspunkt (`patches` i `WritePatchedSheetAsync`), så att det modellen
   inte känner till blir kvar. Testerna finns i `DashboardTests.cs`, dashboarden i

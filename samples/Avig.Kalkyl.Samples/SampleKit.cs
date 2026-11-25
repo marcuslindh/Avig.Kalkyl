@@ -124,7 +124,7 @@ public static class SampleKit
     }
 
     /// <summary>A text box with one run of text.</summary>
-    public static Shape Label(string text, double size, string color, bool bold = false, HorizontalAlignment horizontal = HorizontalAlignment.Left)
+    public static Shape Label(string text, double size, string color, bool bold = false, TextAlignment horizontal = TextAlignment.Left)
     {
         TextFont font = new() { Name = FontName, Size = size, Color = color, Bold = bold };
 
@@ -133,7 +133,7 @@ public static class SampleKit
             Text = new ShapeText(text, font)
             {
                 Horizontal = horizontal,
-                Vertical = VerticalAlignment.Center,
+                Vertical = TextAnchor.Center,
                 MarginLeft = 0,
                 MarginRight = 0,
                 MarginTop = 0,
