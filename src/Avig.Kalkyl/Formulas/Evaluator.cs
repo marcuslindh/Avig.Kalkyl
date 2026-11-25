@@ -462,6 +462,10 @@ internal sealed class Evaluator
 
         for (int row = 0; row < rows; row++)
         {
+            // An array can hold KalkylLimits.MaxArrayCells values, and a formula can combine many:
+            // the caller's token is the limit on time, and it has to reach into this loop.
+            CancellationToken.ThrowIfCancellationRequested();
+
             for (int column = 0; column < columns; column++)
             {
                 Value leftItem = Broadcast(leftArray, row, column);

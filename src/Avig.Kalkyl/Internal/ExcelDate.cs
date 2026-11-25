@@ -58,29 +58,30 @@ internal static class ExcelDate
             return false;
         }
 
+        // Rounded to whole milliseconds first, and the side of the made-up day chosen after: a
+        // serial a hair below 60 is day 60 once rounded, and must not become 1900-03-01.
+        const long Day = 86_400_000;
+        long milliseconds = (long)Math.Round(serial * Day, MidpointRounding.AwayFromZero);
         DateTime start;
-        double days = serial;
 
         if (uses1904 == true)
         {
             start = Base1904;
         }
-        else if (serial < 60)
+        else if (milliseconds < 60 * Day)
         {
             start = DayZero1900;
         }
-        else if (serial < 61)
+        else if (milliseconds < 61 * Day)
         {
             // The made-up 1900-02-29 does not exist in DateTime. The nearest real day is the 28th.
             start = DayZero1900;
-            days = serial - 1;
+            milliseconds -= Day;
         }
         else
         {
             start = Base1900;
         }
-
-        long milliseconds = (long)Math.Round(days * 86_400_000d, MidpointRounding.AwayFromZero);
 
         // The last fraction of a millisecond before 10000-01-01 rounds up past what DateTime can hold.
         if (milliseconds > (DateTime.MaxValue - start).Ticks / TimeSpan.TicksPerMillisecond)

@@ -137,8 +137,9 @@ internal static class ValueTargets
             return;
         }
 
-        // Day 60 in the 1900 system is 1900-02-29, which never existed; it has no date to come back from.
-        if (uses1904 == false && serial >= 60 && serial < 61)
+        // Day 60 in the 1900 system is 1900-02-29, which never existed; it has no date to come back
+        // from. A serial a hair below 60 is day 60 once rounded to the millisecond, as ExcelDate rounds.
+        if (uses1904 == false && IsMadeUpDay(serial) == true)
         {
             return;
         }
@@ -155,7 +156,7 @@ internal static class ValueTargets
         // A later serial number is never an earlier date. The made-up day reads as 1900-02-28
         // again (on purpose, see ExcelDate), so the order breaks there and only there.
         double later = serial + (1.0 / 86_400);
-        bool intoMadeUpDay = uses1904 == false && later >= 60 && later < 61;
+        bool intoMadeUpDay = uses1904 == false && IsMadeUpDay(later) == true;
 
         if (intoMadeUpDay == false && Internal.ExcelDate.TryFromSerial(later, uses1904, out DateTime laterDate) == true && laterDate < date)
         {
@@ -163,6 +164,13 @@ internal static class ValueTargets
                 CultureInfo.InvariantCulture,
                 $"Serial {serial:R} is {date:O} but one second later, {later:R}, is {laterDate:O}."));
         }
+    }
+
+    private static bool IsMadeUpDay(double serial)
+    {
+        double rounded = Math.Round(serial * 86_400_000d, MidpointRounding.AwayFromZero) / 86_400_000d;
+
+        return rounded >= 60 && rounded < 61;
     }
 
     private static void DateFirst(long payload, bool uses1904)
