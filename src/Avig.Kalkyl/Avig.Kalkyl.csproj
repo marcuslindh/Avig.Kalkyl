@@ -23,7 +23,7 @@
     <!-- 0.x until all five milestones are done. The first public version will be 1.0.0. -->
     <IsPackable>true</IsPackable>
     <PackageId>Avig.Kalkyl</PackageId>
-    <Version>0.1.0</Version>
+    <Version>1.0.0</Version>
     <Title>Avig.Kalkyl</Title>
     <Description>Read, write, edit and calculate Excel .xlsx files: typed lists through a source generator, streaming rows, and a document model with a formula engine. Styles, charts, pictures and SVG, shapes, conditional formatting, pivot tables and slicers, and a check for macros and links in files from outside. Failures come back as Avig.Result values. No dependencies besides Avig.Result and Avig.OpenXml; trimming and Native AOT safe.</Description>
     <PackageTags>excel;xlsx;spreadsheet;openxml;streaming;charts;conditional-formatting;pivot-tables;dashboard</PackageTags>

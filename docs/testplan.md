@@ -1,6 +1,6 @@
 # Avig.Kalkyl — testplan för kvalitet och säkerhet
 
-Version 1, 2026-11-24. Testplanen gäller NuGet-paketet Avig.Kalkyl 0.1.0: strömläsaren
+Version 1, 2026-11-24. Testplanen gäller NuGet-paketet Avig.Kalkyl 1.0.0: strömläsaren
 (`XlsxReader`), skrivaren (`XlsxWriter`), den typade mappningen, dokumentmodellen
 (`Workbook`) och formelmotorn.
 
